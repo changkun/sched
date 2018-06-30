@@ -1,5 +1,7 @@
 # goscheduler
 
+[![GoDoc](https://godoc.org/github.com/changkun/goscheduler?status.svg)](https://godoc.org/github.com/changkun/goscheduler)
+
 goschduler is a task scheduler with data persistence for go.
 
 ## Features
