@@ -82,6 +82,46 @@ func TestBoot(t *testing.T) {
 	}
 	task.SetExecuteTime(task.GetExecuteTime().Add(time.Second * 10))
 	Schedule(task)
+
+	// will fail
+	Boot(&CustomTask{
+		ID:          "123",
+		Start:       time.Now().UTC(),
+		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
+		Information: "TestBoot message",
+	})
+
+	// will fail
+	s := getScheduler()
+	s.db.Set(prefix+"777", "123123123", 0).Result()
+	Boot(&CustomTask{
+		ID:          "777",
+		Start:       time.Now().UTC(),
+		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
+		Information: "TestBoot message",
+	})
+
+	// will success
 	Boot(task)
 	time.Sleep(time.Second)
+}
+
+type Func func()
+
+func (c Func) Identifier() string {
+	return "1"
+}
+func (c *Func) SetExecuteTime(t time.Time) time.Time {
+	return time.Now()
+}
+func (c Func) GetExecuteTime() time.Time {
+	return time.Now()
+}
+func (c Func) Execute() {
+	fmt.Println("done")
+}
+func TestSaveFail(t *testing.T) {
+	f := Func(func() { return })
+	s := getScheduler()
+	s.save(&f)
 }
