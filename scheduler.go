@@ -40,9 +40,9 @@ func Initialize(config *DatabaseConfig) error {
 }
 
 // Poller restore tasks from database when application boot up
-func Poller(task Task) {
+func Poller(t Task) {
 	s := getScheduler()
-	err := s.initTasks(task)
+	err := s.initTasks(t)
 	if err != nil {
 		panic(err)
 	}
