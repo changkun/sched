@@ -1,5 +1,5 @@
 /*
-Package goscheduler implements a task scheduler with data persistence.record
+Package goscheduler implements a task scheduler with data persistence
 
 Usage
 
