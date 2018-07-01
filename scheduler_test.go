@@ -7,10 +7,10 @@ import (
 )
 
 func TestInitializer(t *testing.T) {
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "",
 	})
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 }
@@ -37,7 +37,7 @@ func (c CustomTask) Execute() {
 }
 
 func TestPoller(t *testing.T) {
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 	s := getScheduler()
@@ -57,7 +57,7 @@ func TestPoller(t *testing.T) {
 	s.save(task2)
 
 	var customType CustomTask
-	Poller(&customType)
+	Poll(&customType)
 	time.Sleep(time.Second * time.Duration(5))
 }
 
@@ -74,7 +74,7 @@ func TestSchedule(t *testing.T) {
 		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
 		Information: "TestSchedule message 2",
 	}
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 	if err := Schedule(task1); err != nil {
@@ -94,7 +94,7 @@ func TestSchedule(t *testing.T) {
 }
 
 func TestBoot(t *testing.T) {
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 
@@ -102,30 +102,22 @@ func TestBoot(t *testing.T) {
 		ID:          "456",
 		Start:       time.Now().UTC(),
 		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestBoot message",
+		Information: "TestBoot message: originally schedued",
 	}
 	task.SetExecuteTime(task.GetExecuteTime().Add(time.Second * 10))
 	Schedule(task)
-
-	s := getScheduler()
-	// will fail
 	Boot(&CustomTask{
 		ID:          "123",
 		Start:       time.Now().UTC(),
 		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestBoot message",
+		Information: "TestBoot message: 123",
 	})
-	s.db.Del(prefix + "123")
-
-	// will fail
-	s.db.Set(prefix+"777", "123123123", 0).Result()
 	Boot(&CustomTask{
 		ID:          "777",
 		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestBoot message",
+		End:         time.Now().UTC().Add(time.Duration(10) * time.Second),
+		Information: "TestBoot message: 777",
 	})
-	s.db.Del(prefix + "777")
 
 	// will success
 	Boot(task)
@@ -148,7 +140,7 @@ func (c Func) Execute() {
 }
 
 func TestPollerFail(t *testing.T) {
-	Initialize(&DatabaseConfig{
+	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 	s := getScheduler()

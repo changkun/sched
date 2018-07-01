@@ -26,8 +26,8 @@ type DatabaseConfig struct {
 	URI string
 }
 
-// Initialize creates the connection of database
-func Initialize(config *DatabaseConfig) error {
+// Init creates the connection of database
+func Init(config *DatabaseConfig) error {
 	s := getScheduler()
 	if s.db == nil {
 		option, err := redis.ParseURL(config.URI)
@@ -39,8 +39,8 @@ func Initialize(config *DatabaseConfig) error {
 	return nil
 }
 
-// Poller restore tasks from database when application boot up
-func Poller(t Task) {
+// Poll restore tasks from database when application boot up
+func Poll(t Task) {
 	s := getScheduler()
 	err := s.initTasks(t)
 	if err != nil {

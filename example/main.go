@@ -39,14 +39,14 @@ func (c CustomTask) Execute() {
 
 func main() {
 	// Init goscheduler database
-	goscheduler.Initialize(&goscheduler.DatabaseConfig{
+	goscheduler.Init(&goscheduler.DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
 
 	// When goscheduler database is initiated,
 	// call Poller to recover all unfinished task
 	var task CustomTask
-	goscheduler.Poller(&task)
+	goscheduler.Poll(&task)
 
 	// A task should be executed in 10 seconds
 	task = CustomTask{
