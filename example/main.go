@@ -43,6 +43,8 @@ func main() {
 		URI: "redis://127.0.0.1:6379/8",
 	})
 
+	// When goscheduler database is initiated,
+	// call Poller to recover all unfinished task
 	var task CustomTask
 	goscheduler.Poller(&task)
 
@@ -59,6 +61,6 @@ func main() {
 	// however we decide to boot the task immediately
 	goscheduler.Boot(&task)
 
-	// let's sleep 2 secs wait for the retult
+	// let's sleep 2 secs wait for the retult of the task
 	time.Sleep(time.Second * 2)
 }
