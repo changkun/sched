@@ -74,17 +74,8 @@ func Schedule(t Task) error {
 
 // Boot a task immediately
 func Boot(t Task) error {
-	s := getScheduler()
-	result, err := s.db.Get(prefix + t.Identifier()).Result()
-	if err != nil {
-		return err
-	}
-	r := &record{}
-	if err := json.Unmarshal([]byte(result), r); err != nil {
-		return err
-	}
 	t.SetExecuteTime(time.Now().UTC())
-	s.reschedule(t)
+	Schedule(t)
 	return nil
 }
 
