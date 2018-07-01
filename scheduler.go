@@ -2,13 +2,14 @@ package goscheduler
 
 import (
 	"encoding/json"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
 )
 
-// Task interface defines the task need to be execute
+// Task interface defines the task need to be executed
 type Task interface {
 	// Identifier should returns a unique string for the task, usually can return an UUID
 	Identifier() string
@@ -20,12 +21,12 @@ type Task interface {
 	Execute()
 }
 
-// DatabaseConfig ...
+// DatabaseConfig provides the database URI for goschduler
 type DatabaseConfig struct {
 	URI string
 }
 
-// Initialize ...
+// Initialize creates the connection of database
 func Initialize(config *DatabaseConfig) error {
 	s := getScheduler()
 	if s.db == nil {
@@ -36,6 +37,15 @@ func Initialize(config *DatabaseConfig) error {
 		s.db = redis.NewClient(option)
 	}
 	return nil
+}
+
+// Poller restore tasks from database when application boot up
+func Poller(task Task) {
+	s := getScheduler()
+	err := s.initTasks(task)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // Schedule a task
@@ -138,6 +148,31 @@ func (s *scheduler) save(t Task) error {
 		0,
 	).Result(); err != nil {
 		return err
+	}
+	return nil
+}
+func (s scheduler) initTasks(task Task) error {
+	keys, err := s.db.Keys(prefix + "*").Result()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		result, err := s.db.Get(key).Result()
+		if err != nil {
+			return err
+		}
+		r := &record{}
+		if err := json.Unmarshal([]byte(result), r); err != nil {
+			return err
+		}
+		// the following json (Un)Marshal is not possible if r is unmarshaled success
+		bytes, _ := json.Marshal(r.Data)
+		temp := reflect.New(reflect.ValueOf(task).Elem().Type()).Interface().(Task)
+		json.Unmarshal(bytes, &temp)
+
+		if err := Schedule(temp); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -43,8 +43,11 @@ func main() {
 		URI: "redis://127.0.0.1:6379/8",
 	})
 
+	var task CustomTask
+	goscheduler.Poller(&task)
+
 	// A task should be executed in 10 seconds
-	task := &CustomTask{
+	task = CustomTask{
 		ID:          "123",
 		Start:       time.Now().UTC(),
 		End:         time.Now().UTC().Add(time.Duration(10) * time.Second),
@@ -52,9 +55,9 @@ func main() {
 	}
 
 	// first schedule the task at 10 seconds later
-	goscheduler.Schedule(task)
+	goscheduler.Schedule(&task)
 	// however we decide to boot the task immediately
-	goscheduler.Boot(task)
+	goscheduler.Boot(&task)
 
 	// let's sleep 2 secs wait for the retult
 	time.Sleep(time.Second * 2)
