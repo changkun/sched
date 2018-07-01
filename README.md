@@ -13,7 +13,9 @@ goschduler is a task scheduler library with data persistence for go.
 ## Usage
 
 goscheduler persist your task to Redis, it schedules your task at a specific time
-or boot an existing task immediately. See [example](./example/main.go) for detail usage.
+or boot an existing task immediately.
+
+See [example](./example/main.go) for detail usage.
 
 ## License
 
