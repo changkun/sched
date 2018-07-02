@@ -292,8 +292,7 @@ func (c Func) FailRetryDuration() time.Duration {
 }
 func TestSaveFail(t *testing.T) {
 	f := Func(func() { return })
-	s := getScheduler()
-	if err := s.save(&f); err == nil {
+	if err := Schedule(&f); err == nil {
 		t.FailNow()
 	}
 }
@@ -301,14 +300,15 @@ func TestSaveFail(t *testing.T) {
 func TestPollerFail(t *testing.T) {
 	Init(&Config{DatabaseURI: "redis://127.0.0.1:6379/8"})
 	s := getScheduler()
-	s.db.Set(prefix+"777", "123123123", 0).Result()
-	var c CustomTask
-	if err := s.initTasks(&c); err != nil {
+	defer func() {
 		if _, err := s.db.Del(prefix + "777").Result(); err == nil {
 			return
 		}
-	}
-	t.FailNow()
+		t.FailNow()
+	}()
+	s.db.Set(prefix+"777", "123123123", 0).Result()
+	var c CustomTask
+	Poll(&c)
 }
 
 type FailTask struct {
@@ -353,9 +353,38 @@ func TestTaskFailRetry(t *testing.T) {
 	})
 
 	// FailTask is designed to fail three times
-	time.Sleep(time.Second * 4)
+	time.Sleep(time.Second * 5)
 	if err := isTaskScheduled(); err != nil {
 		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
+}
+
+func TestDatabaseOperationFail(t *testing.T) {
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
+	})
+
+	s := getScheduler()
+	s.db.Close()
+	start := time.Now().UTC()
+	task := &CustomTask{
+		ID:          "456",
+		Start:       start,
+		End:         start.Add(time.Duration(2) * time.Second),
+		Information: "TestSchedule task",
+	}
+
+	if err := Schedule(task); err == nil {
+		t.Error("TestDatabaseOperationFail schedule task not error")
+		t.FailNow()
+	}
+	if err := Poll(task); err == nil {
+		t.Error("TestDatabaseOperationFail schedule task not error")
+		t.FailNow()
+	}
+	if err := s.recoverTask(task, "random"); err == nil {
+		t.Error("TestDatabaseOperationFail schedule task not error")
 		t.FailNow()
 	}
 }

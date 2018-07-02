@@ -42,12 +42,13 @@ func Init(config *Config) error {
 }
 
 // Poll recover tasks from database when application boot up
-func Poll(t Task) {
+func Poll(t Task) error {
 	s := getScheduler()
 	err := s.initTasks(t)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // Schedule a task
@@ -59,6 +60,7 @@ func Schedule(t Task) error {
 	if err := s.save(t); err != nil {
 		return err
 	}
+
 	runner := s.getRunnerBy(t.Identifier())
 	if runner.Timer != nil {
 		if !runner.Timer.Stop() {
@@ -142,30 +144,31 @@ func (s *scheduler) save(t Task) error {
 	}
 	return nil
 }
-func (s scheduler) initTasks(task Task) error {
+func (s scheduler) initTasks(t Task) error {
 	keys, err := s.db.Keys(prefix + "*").Result()
 	if err != nil {
 		return err
 	}
 	for _, key := range keys {
-		result, err := s.db.Get(key).Result()
-		if err != nil {
-			return err
-		}
-		r := &record{}
-		if err := json.Unmarshal([]byte(result), r); err != nil {
-			return err
-		}
-		// the following json (Un)Marshal is not possible if r is unmarshaled success
-		bytes, _ := json.Marshal(r.Data)
-		temp := reflect.New(reflect.ValueOf(task).Elem().Type()).Interface().(Task)
-		json.Unmarshal(bytes, &temp)
-
-		if err := Schedule(temp); err != nil {
-			return err
-		}
+		s.recoverTask(t, key)
 	}
 	return nil
+}
+func (s scheduler) recoverTask(t Task, key string) error {
+	result, err := s.db.Get(key).Result()
+	if err != nil {
+		return err
+	}
+	r := &record{}
+	if err := json.Unmarshal([]byte(result), r); err != nil {
+		return err
+	}
+	// the following json (Un)Marshal is not possible return err if r is unmarshaled success
+	bytes, _ := json.Marshal(r.Data)
+	temp := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
+	json.Unmarshal(bytes, &temp)
+
+	return Schedule(temp)
 }
 func (s scheduler) reschedule(t Task) {
 	s.getRunnerBy(t.Identifier()).Timer = time.NewTimer(
