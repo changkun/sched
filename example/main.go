@@ -32,15 +32,21 @@ func (c *CustomTask) SetExecuteTime(t time.Time) time.Time {
 }
 
 // Execute defines the actual running task
-func (c CustomTask) Execute() {
+func (c *CustomTask) Execute() error {
 	// implement your task execution in
 	fmt.Println("Task is Running: ", c.Information)
+	return nil
+}
+
+// FailRetryDuration returns the task retry duration if fails
+func (c CustomTask) FailRetryDuration() time.Duration {
+	return time.Second
 }
 
 func main() {
 	// Init goscheduler database
-	goscheduler.Init(&goscheduler.DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	goscheduler.Init(&goscheduler.Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
 	// When goscheduler database is initiated,
@@ -55,6 +61,7 @@ func main() {
 		End:         time.Now().UTC().Add(time.Duration(10) * time.Second),
 		Information: "this is a task message message",
 	}
+	fmt.Println("Retry duration if execution failed: ", task.FailRetryDuration())
 
 	// first schedule the task at 10 seconds later
 	goscheduler.Schedule(&task)

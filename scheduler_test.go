@@ -41,11 +41,11 @@ func isTaskScheduled() error {
 }
 
 func TestInitializer(t *testing.T) {
-	Init(&DatabaseConfig{
-		URI: "",
+	Init(&Config{
+		DatabaseURI: "",
 	})
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 }
 
@@ -67,14 +67,17 @@ func (c *CustomTask) SetExecuteTime(t time.Time) time.Time {
 func (c CustomTask) GetExecuteTime() time.Time {
 	return c.End
 }
-func (c *CustomTask) Execute() {
+func (c *CustomTask) Execute() error {
 	fmt.Println("Custom Task is Running: ", c.Information, ", time: ", time.Now().UTC())
 	c.Executed = true
+	return nil
 }
-
+func (c CustomTask) FailRetryDuration() time.Duration {
+	return time.Second
+}
 func TestPoller(t *testing.T) {
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
 	// prepare data into redis database
@@ -131,8 +134,8 @@ func TestPoller(t *testing.T) {
 
 func TestSchedule(t *testing.T) {
 	// prepare database
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
 	s := getScheduler()
@@ -189,8 +192,8 @@ func TestSchedule(t *testing.T) {
 
 func TestReschedule(t *testing.T) {
 	// prepare database
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
 	s := getScheduler()
@@ -229,8 +232,8 @@ func TestReschedule(t *testing.T) {
 }
 
 func TestBoot(t *testing.T) {
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 	s := getScheduler()
 
@@ -281,10 +284,12 @@ func (c *Func) SetExecuteTime(t time.Time) time.Time {
 func (c Func) GetExecuteTime() time.Time {
 	return time.Now()
 }
-func (c Func) Execute() {
-	return
+func (c Func) Execute() error {
+	return nil
 }
-
+func (c Func) FailRetryDuration() time.Duration {
+	return time.Second
+}
 func TestSaveFail(t *testing.T) {
 	f := Func(func() { return })
 	s := getScheduler()
@@ -294,7 +299,7 @@ func TestSaveFail(t *testing.T) {
 }
 
 func TestPollerFail(t *testing.T) {
-	Init(&DatabaseConfig{URI: "redis://127.0.0.1:6379/8"})
+	Init(&Config{DatabaseURI: "redis://127.0.0.1:6379/8"})
 	s := getScheduler()
 	s.db.Set(prefix+"777", "123123123", 0).Result()
 	var c CustomTask
@@ -304,4 +309,53 @@ func TestPollerFail(t *testing.T) {
 		}
 	}
 	t.FailNow()
+}
+
+type FailTask struct {
+	failCount int
+	ID        string
+	End       time.Time
+}
+
+func (f FailTask) Identifier() string {
+	return f.ID
+}
+func (f FailTask) GetExecuteTime() time.Time {
+	return f.End
+}
+func (f *FailTask) SetExecuteTime(t time.Time) time.Time {
+	f.End = t
+	return t
+}
+
+// Execute defines the actual running task
+func (f *FailTask) Execute() error {
+	if f.failCount == 3 {
+		fmt.Println("success!")
+		return nil
+	}
+	fmt.Println("fail count: ", f.failCount)
+	f.failCount++
+	return errors.New("still fail")
+}
+
+// FailRetryDuration returns the task retry duration if fails
+func (f FailTask) FailRetryDuration() time.Duration {
+	return time.Second
+}
+func TestTaskFailRetry(t *testing.T) {
+	Init(&Config{DatabaseURI: "redis://127.0.0.1:6379/8"})
+	start := time.Now().UTC()
+
+	Boot(&FailTask{
+		ID:  "456",
+		End: start.Add(time.Duration(1) * time.Second),
+	})
+
+	// FailTask is designed to fail three times
+	time.Sleep(time.Second * 4)
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
 }

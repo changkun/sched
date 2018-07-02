@@ -18,19 +18,22 @@ type Task interface {
 	// SetExecuteTime can set the execution time of the task
 	SetExecuteTime(t time.Time) time.Time
 	// Execute defines the actual running task
-	Execute()
+	Execute() error
+	// FailRetryDuration returns the task retry duration if fails
+	FailRetryDuration() time.Duration
 }
 
-// DatabaseConfig provides the database URI for goschduler
-type DatabaseConfig struct {
-	URI string
+// Config provides the database URI for goschduler
+type Config struct {
+	DatabaseURI           string
+	TaskFailRetryDuration time.Duration
 }
 
 // Init creates the connection of database
-func Init(config *DatabaseConfig) error {
+func Init(config *Config) error {
 	s := getScheduler()
 	if s.db == nil {
-		option, err := redis.ParseURL(config.URI)
+		option, err := redis.ParseURL(config.DatabaseURI)
 		if err != nil {
 			return err
 		}
@@ -39,7 +42,7 @@ func Init(config *DatabaseConfig) error {
 	return nil
 }
 
-// Poll restore tasks from database when application boot up
+// Poll recover tasks from database when application boot up
 func Poll(t Task) {
 	s := getScheduler()
 	err := s.initTasks(t)
@@ -58,16 +61,12 @@ func Schedule(t Task) error {
 		return err
 	}
 	runner := s.getRunnerBy(t.Identifier())
-
-	// if no entries then start a new one
 	if runner.Timer != nil {
 		if !runner.Timer.Stop() {
-			// Task already start
+			// Task has been started
 			return nil
 		}
 	}
-
-	// otherwise reschedule the task
 	s.reschedule(t)
 	return nil
 }
@@ -84,6 +83,8 @@ const prefix = "goscheduler:"
 var onceManager sync.Once
 var onceSchduler sync.Once
 var worker *scheduler
+var retryNum int
+var retryDuration time.Duration
 
 type taskManager map[string]*taskRunner
 type taskRunner struct {
@@ -168,31 +169,27 @@ func (s scheduler) initTasks(task Task) error {
 	return nil
 }
 func (s scheduler) reschedule(t Task) {
-	defer func() {
-		recover()
-	}()
 	s.getRunnerBy(t.Identifier()).Timer = time.NewTimer(
 		time.Duration(t.GetExecuteTime().Sub(time.Now().UTC())),
 	)
 	go func(t Task) {
 		<-s.getRunnerBy(t.Identifier()).Timer.C
-		s.execute(t)
-	}(t)
-}
-func (s scheduler) execute(t Task) {
-	defer func() {
-		recover()
-	}()
-	if t.GetExecuteTime().Before(time.Now().UTC()) {
-		go func(t Task) {
-			t.Execute()
-			s.db.Del(prefix + t.Identifier()).Result()
-			delete(*s.getManager(), t.Identifier())
-		}(t)
-		return
-	}
-	if !s.getRunnerBy(t.Identifier()).Timer.Stop() {
+		s.getRunnerBy(t.Identifier()).Timer = nil
+
+		if t.GetExecuteTime().Before(time.Now().UTC()) {
+			go func(t Task) {
+				if err := t.Execute(); err != nil {
+					// failed retry
+					t.SetExecuteTime(t.GetExecuteTime().Add(t.FailRetryDuration()))
+					Schedule(t)
+					return
+				}
+				s.db.Del(prefix + t.Identifier()).Result()
+				delete(*s.getManager(), t.Identifier())
+			}(t)
+			return
+		}
+		// no need to stop timer since it already expired
 		s.reschedule(t)
-		return
-	}
+	}(t)
 }

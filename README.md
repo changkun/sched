@@ -6,14 +6,15 @@ goschduler is a task scheduler library with data persistence for go.
 
 ## Features
 
-- Schedule and persist a task at a specific time
+- Schedule a task at a specific time
 - Boot (an existing) task immediately
-- Recover specified type of tasks from database when application restart
+- Recover specified type of tasks from database when app restarts
+- Auto retry if scheduled task faild
 
 ## Usage
 
-goscheduler persists your task to Redis, it schedules your task at a specific time
-or boot an existing task immediately.
+goscheduler persists your task to [Redis](https://redis.io/), 
+it schedules your task at a specific time or boot an existing task immediately.
 
 See [example](./example/main.go) for detail usage.
 
