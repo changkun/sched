@@ -61,7 +61,7 @@ func Schedule(t Task) error {
 
 	// if no entries then start a new one
 	if runner.Timer != nil {
-		if stop := runner.Timer.Stop(); !stop {
+		if !runner.Timer.Stop() {
 			// Task already start
 			return nil
 		}
@@ -191,7 +191,8 @@ func (s scheduler) execute(t Task) {
 		}(t)
 		return
 	}
-	s.getRunnerBy(t.Identifier()).Timer.Stop()
-	s.reschedule(t)
-	return
+	if !s.getRunnerBy(t.Identifier()).Timer.Stop() {
+		s.reschedule(t)
+		return
+	}
 }

@@ -1,10 +1,44 @@
 package goscheduler
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func isTaskExists(num int) error {
+	s := getScheduler()
+
+	// check if all task record in redis has been removed
+	keys, err := s.db.Keys(prefix + "*").Result()
+	if err != nil {
+		return errors.New("Interacting with database error: " + err.Error())
+	}
+	if len(keys) != num {
+		return errors.New("There are keys unremoved: " + fmt.Sprintf("%s", keys))
+	}
+	return nil
+}
+func isTaskScheduled() error {
+	s := getScheduler()
+
+	// check if all task record in redis has been removed
+	keys, err := s.db.Keys(prefix + "*").Result()
+	if err != nil {
+		return errors.New("Interacting with database error: " + err.Error())
+	}
+	if len(keys) != 0 {
+		return errors.New("There are keys unremoved: " + fmt.Sprintf("%s", keys))
+	}
+
+	// check if manager is not empty
+	if len(*s.getManager()) != 0 {
+		return errors.New("Manager is not empty: " + fmt.Sprint(*s.getManager()))
+	}
+	return nil
+}
 
 func TestInitializer(t *testing.T) {
 	Init(&DatabaseConfig{
@@ -20,6 +54,7 @@ type CustomTask struct {
 	Start       time.Time `json:"start"`
 	End         time.Time `json:"end"`
 	Information string    `json:"info"`
+	Executed    bool      `json:"is_executed"`
 }
 
 func (c CustomTask) Identifier() string {
@@ -32,96 +67,207 @@ func (c *CustomTask) SetExecuteTime(t time.Time) time.Time {
 func (c CustomTask) GetExecuteTime() time.Time {
 	return c.End
 }
-func (c CustomTask) Execute() {
-	fmt.Println("Custom Task is Running: ", c.Information)
+func (c *CustomTask) Execute() {
+	fmt.Println("Custom Task is Running: ", c.Information, ", time: ", time.Now().UTC())
+	c.Executed = true
 }
 
 func TestPoller(t *testing.T) {
 	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
+
+	// prepare data into redis database
 	s := getScheduler()
+	start := time.Now().UTC()
 	task1 := &CustomTask{
 		ID:          "123",
-		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestSchedule message 1",
+		Start:       start,
+		End:         start.Add(time.Duration(1) * time.Second),
+		Information: "TestPoller task 1",
+		Executed:    false,
+	}
+	task3 := &CustomTask{
+		ID:          "789",
+		Start:       start,
+		End:         start.Add(time.Duration(3) * time.Second),
+		Information: "TestPoller task 3",
+		Executed:    false,
 	}
 	task2 := &CustomTask{
 		ID:          "456",
-		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(2) * time.Second),
-		Information: "TestSchedule message 2",
+		Start:       start,
+		End:         start.Add(time.Duration(2) * time.Second),
+		Information: "TestPoller task 2",
+		Executed:    false,
 	}
 	s.save(task1)
 	s.save(task2)
+	s.save(task3)
 
+	// test poller
 	var customType CustomTask
 	Poll(&customType)
-	time.Sleep(time.Second * time.Duration(5))
+	if err := isTaskExists(3); err != nil {
+		t.Error("task is not scheduled: ", err)
+	}
+
+	// sleep to wait execution, a strict wait condition
+	// 1 sec tolerance
+	wait := start.Add(time.Second * time.Duration(3)).Sub(time.Now().UTC())
+	time.Sleep(wait + time.Second)
+
+	// check if customType is used
+	if customType != reflect.Zero(reflect.TypeOf(customType)).Interface() {
+		t.Error("`customType` has been used: ", customType)
+		t.FailNow()
+	}
+
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+	}
+	return
 }
 
 func TestSchedule(t *testing.T) {
-	task1 := &CustomTask{
-		ID:          "123",
-		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestSchedule message 1",
-	}
-	task2 := &CustomTask{
-		ID:          "456",
-		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestSchedule message 2",
-	}
+	// prepare database
 	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
-	if err := Schedule(task1); err != nil {
-		t.Errorf("error: %s", err.Error())
-	}
-	if err := Schedule(task2); err != nil {
-		t.Errorf("error: %s", err.Error())
-	}
-	task1.SetExecuteTime(task1.GetExecuteTime().Add(time.Second))
-	if err := Schedule(task1); err != nil {
-		t.Errorf("error: %s", err.Error())
-	}
-	task1.SetExecuteTime(task1.GetExecuteTime().Add(time.Second))
+
 	s := getScheduler()
-	s.save(task1)
-	time.Sleep(time.Second * time.Duration(3))
+
+	// check if manager is not empty
+	if len(*s.getManager()) != 0 {
+		t.Error("manager is not empty: ", *s.getManager())
+		t.FailNow()
+	}
+
+	// prepare tasks
+	// original: task 1 should execute before task 2
+	start := time.Now().UTC()
+	task1 := &CustomTask{
+		ID:          "123",
+		Start:       start,
+		End:         start.Add(time.Duration(1) * time.Second),
+		Information: "TestSchedule task 1",
+	}
+	task2 := &CustomTask{
+		ID:          "456",
+		Start:       start,
+		End:         start.Add(time.Duration(2) * time.Second),
+		Information: "TestSchedule task 2",
+	}
+
+	// schedule tasks 1
+	if err := Schedule(task1); err != nil {
+		t.Errorf("schedule task 1 error: %s", err.Error())
+		t.FailNow()
+	}
+	// reschedule task 1, then task 1 should execute after task 2
+	task1.SetExecuteTime(task1.GetExecuteTime().Add(time.Second * time.Duration(2)))
+	if err := Schedule(task1); err != nil {
+		t.Errorf("error: %s", err.Error())
+		t.FailNow()
+	}
+	// schedule task 2
+	if err := Schedule(task2); err != nil {
+		t.Errorf("schedule task 2 error: %s", err.Error())
+		t.FailNow()
+	}
+
+	// sleep to wait execution, a strict wait condition
+	// 1 sec tolerance
+	wait := start.Add(time.Second * time.Duration(3)).Sub(time.Now().UTC())
+	time.Sleep(wait + time.Second)
+
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
+}
+
+func TestReschedule(t *testing.T) {
+	// prepare database
+	Init(&DatabaseConfig{
+		URI: "redis://127.0.0.1:6379/8",
+	})
+
+	s := getScheduler()
+
+	// check if manager is not empty
+	if len(*s.getManager()) != 0 {
+		t.Error("manager is not empty: ", *s.getManager())
+		t.FailNow()
+	}
+
+	start := time.Now().UTC()
+	task := &CustomTask{
+		ID:          "123",
+		Start:       start,
+		End:         start.Add(time.Duration(1) * time.Second),
+		Information: "TestSchedule task 1",
+	}
+	// schedule task second later
+	if err := Schedule(task); err != nil {
+		t.Errorf("schedule task 1 error: %s", err.Error())
+		t.FailNow()
+	}
+	// somehow the database has changed
+	task.SetExecuteTime(task.GetExecuteTime().Add(time.Second))
+	s.save(task)
+
+	// sleep to wait execution, a strict wait condition
+	// 1 sec tolerance
+	wait := start.Add(time.Second * time.Duration(2)).Sub(time.Now().UTC())
+	time.Sleep(wait + time.Second)
+
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
 }
 
 func TestBoot(t *testing.T) {
 	Init(&DatabaseConfig{
 		URI: "redis://127.0.0.1:6379/8",
 	})
+	s := getScheduler()
 
-	task := &CustomTask{
-		ID:          "456",
-		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestBoot message: originally schedued",
+	// check if manager is not empty
+	if len(*s.getManager()) != 0 {
+		t.Error("manager is not empty: ", *s.getManager())
+		t.FailNow()
 	}
-	task.SetExecuteTime(task.GetExecuteTime().Add(time.Second * 10))
-	Schedule(task)
+
+	// directly boot an task was originally scheduled 10 secs later
 	Boot(&CustomTask{
 		ID:          "123",
 		Start:       time.Now().UTC(),
-		End:         time.Now().UTC().Add(time.Duration(1) * time.Second),
-		Information: "TestBoot message: 123",
-	})
-	Boot(&CustomTask{
-		ID:          "777",
-		Start:       time.Now().UTC(),
 		End:         time.Now().UTC().Add(time.Duration(10) * time.Second),
-		Information: "TestBoot message: 777",
+		Information: "TestBoot task 123",
 	})
+	time.Sleep(time.Duration(5) * time.Millisecond)
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
 
-	// will success
+	start := time.Now().UTC()
+	task := &CustomTask{
+		ID:          "456",
+		Start:       start,
+		End:         start.Add(time.Duration(10) * time.Second),
+		Information: "TestBoot task 456",
+	}
+	Schedule(task)
+	// boot the task immediately
 	Boot(task)
-	time.Sleep(time.Second)
+	time.Sleep(time.Duration(5) * time.Millisecond)
+	if err := isTaskScheduled(); err != nil {
+		t.Error("There is sill task unschduled, reason: ", err)
+		t.FailNow()
+	}
 }
 
 type Func func()
@@ -139,20 +285,23 @@ func (c Func) Execute() {
 	return
 }
 
+func TestSaveFail(t *testing.T) {
+	f := Func(func() { return })
+	s := getScheduler()
+	if err := s.save(&f); err == nil {
+		t.FailNow()
+	}
+}
+
 func TestPollerFail(t *testing.T) {
-	Init(&DatabaseConfig{
-		URI: "redis://127.0.0.1:6379/8",
-	})
+	Init(&DatabaseConfig{URI: "redis://127.0.0.1:6379/8"})
 	s := getScheduler()
 	s.db.Set(prefix+"777", "123123123", 0).Result()
 	var c CustomTask
 	if err := s.initTasks(&c); err != nil {
-		s.db.Del(prefix + "777")
+		if _, err := s.db.Del(prefix + "777").Result(); err == nil {
+			return
+		}
 	}
-}
-
-func TestSaveFail(t *testing.T) {
-	f := Func(func() { return })
-	s := getScheduler()
-	s.save(&f)
+	t.FailNow()
 }
