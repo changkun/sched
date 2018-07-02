@@ -63,10 +63,11 @@ func Schedule(t Task) error {
 
 	runner := s.getRunnerBy(t.Identifier())
 	if runner.Timer != nil {
-		if !runner.Timer.Stop() {
-			// Task has been started
-			return nil
-		}
+		// timer.Stop can fail in the following case:
+		//  - a timer has executed: this is not possible in our implementation because timer will be nil after execution
+		//  - user created a timer directly, without invoking startTimer: not our case
+		// see https://github.com/golang/go/blob/d6c3b0a56d8c81c221b0adf69ae351f7cd467854/src/runtime/time.go#L177
+		runner.Timer.Stop()
 	}
 	s.reschedule(t)
 	return nil
