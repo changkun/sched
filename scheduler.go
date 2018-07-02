@@ -25,8 +25,7 @@ type Task interface {
 
 // Config provides the database URI for goschduler
 type Config struct {
-	DatabaseURI           string
-	TaskFailRetryDuration time.Duration
+	DatabaseURI string
 }
 
 // Init creates the connection of database
