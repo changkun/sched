@@ -34,8 +34,8 @@ func isTaskScheduled() error {
 	}
 
 	// check if manager is not empty
-	if len(*s.getManager()) != 0 {
-		return errors.New("Manager is not empty: " + fmt.Sprint(*s.getManager()))
+	if len(*getManager()) != 0 {
+		return errors.New("Manager is not empty: " + fmt.Sprint(*getManager()))
 	}
 	return nil
 }
@@ -138,11 +138,9 @@ func TestSchedule(t *testing.T) {
 		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
-	s := getScheduler()
-
 	// check if manager is not empty
-	if len(*s.getManager()) != 0 {
-		t.Error("manager is not empty: ", *s.getManager())
+	if len(*getManager()) != 0 {
+		t.Error("manager is not empty: ", *getManager())
 		t.FailNow()
 	}
 
@@ -199,8 +197,8 @@ func TestReschedule(t *testing.T) {
 	s := getScheduler()
 
 	// check if manager is not empty
-	if len(*s.getManager()) != 0 {
-		t.Error("manager is not empty: ", *s.getManager())
+	if len(*getManager()) != 0 {
+		t.Error("manager is not empty: ", *getManager())
 		t.FailNow()
 	}
 
@@ -235,11 +233,10 @@ func TestBoot(t *testing.T) {
 	Init(&Config{
 		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
-	s := getScheduler()
 
 	// check if manager is not empty
-	if len(*s.getManager()) != 0 {
-		t.Error("manager is not empty: ", *s.getManager())
+	if len(*getManager()) != 0 {
+		t.Error("manager is not empty: ", *getManager())
 		t.FailNow()
 	}
 
@@ -383,8 +380,13 @@ func TestDatabaseOperationFail(t *testing.T) {
 		t.Error("TestDatabaseOperationFail schedule task not error")
 		t.FailNow()
 	}
-	if err := s.recoverTask(task, "random"); err == nil {
+	if err := recoverTask(task, "random"); err == nil {
 		t.Error("TestDatabaseOperationFail schedule task not error")
 		t.FailNow()
 	}
+
+	execute(&FailTask{
+		ID:  "456",
+		End: time.Now().UTC(),
+	})
 }
