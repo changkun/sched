@@ -6,6 +6,7 @@ goschduler is a task scheduler library with data persistence for go.
 
 ## Features
 
+- Thread safety
 - Schedule a task at a specific time
 - Boot (an existing) task immediately
 - Recover specified type of tasks from database when app restarts

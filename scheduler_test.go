@@ -1,12 +1,23 @@
 package goscheduler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
+
+func lenSyncMap(m *sync.Map) (length int64) {
+	length = 0
+	m.Range(func(_, _ interface{}) bool {
+		length++
+		return true
+	})
+	return length
+}
 
 func isTaskExists(num int) error {
 	s := getScheduler()
@@ -34,8 +45,8 @@ func isTaskScheduled() error {
 	}
 
 	// check if manager is not empty
-	if len(*getManager()) != 0 {
-		return errors.New("Manager is not empty: " + fmt.Sprint(*getManager()))
+	if lenSyncMap(getScheduler().manager) != 0 {
+		return errors.New("Manager is not empty: " + fmt.Sprint(getScheduler().manager))
 	}
 	return nil
 }
@@ -50,6 +61,7 @@ func TestInitializer(t *testing.T) {
 }
 
 type CustomTask struct {
+	mutex       sync.Mutex
 	ID          string    `json:"uuid"`
 	Start       time.Time `json:"start"`
 	End         time.Time `json:"end"`
@@ -110,7 +122,9 @@ func TestPoller(t *testing.T) {
 
 	// test poller
 	var customType CustomTask
-	Poll(&customType)
+	if err := Poll(&customType); err != nil {
+		t.Error("schedue task fail: ", err)
+	}
 	if err := isTaskExists(3); err != nil {
 		t.Error("task is not scheduled: ", err)
 	}
@@ -139,8 +153,8 @@ func TestSchedule(t *testing.T) {
 	})
 
 	// check if manager is not empty
-	if len(*getManager()) != 0 {
-		t.Error("manager is not empty: ", *getManager())
+	if lenSyncMap(getScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", getScheduler().manager)
 		t.FailNow()
 	}
 
@@ -194,11 +208,9 @@ func TestReschedule(t *testing.T) {
 		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
-	s := getScheduler()
-
 	// check if manager is not empty
-	if len(*getManager()) != 0 {
-		t.Error("manager is not empty: ", *getManager())
+	if lenSyncMap(getScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", getScheduler().manager)
 		t.FailNow()
 	}
 
@@ -215,8 +227,28 @@ func TestReschedule(t *testing.T) {
 		t.FailNow()
 	}
 	// somehow the database has changed
-	task.SetExecuteTime(task.GetExecuteTime().Add(time.Second))
-	s.save(task)
+	// for example the user changed the database manually
+	result, err := getScheduler().db.Get(prefix + "123").Result()
+	if err != nil {
+		t.Error("Get from database error 1")
+		t.FailNow()
+	}
+	r := &record{}
+	if err := json.Unmarshal([]byte(result), r); err != nil {
+		t.Error("Get from database error 2")
+		t.FailNow()
+	}
+	// change
+	r.Execution = start.Add(2 * time.Second)
+	bytes, err := json.Marshal(r)
+	if err != nil {
+		t.Error("Get from database error 3")
+		t.FailNow()
+	}
+	if _, err := getScheduler().db.Set(prefix+"123", string(bytes), 0).Result(); err != nil {
+		t.Error("Get from database error 4")
+		t.FailNow()
+	}
 
 	// sleep to wait execution, a strict wait condition
 	// 1 sec tolerance
@@ -235,8 +267,8 @@ func TestBoot(t *testing.T) {
 	})
 
 	// check if manager is not empty
-	if len(*getManager()) != 0 {
-		t.Error("manager is not empty: ", *getManager())
+	if lenSyncMap(getScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", getScheduler().manager)
 		t.FailNow()
 	}
 
@@ -377,16 +409,25 @@ func TestDatabaseOperationFail(t *testing.T) {
 		t.FailNow()
 	}
 	if err := Poll(task); err == nil {
-		t.Error("TestDatabaseOperationFail schedule task not error")
+		t.Error("TestDatabaseOperationFail poll task not error")
 		t.FailNow()
 	}
 	if err := recoverTask(task, "random"); err == nil {
-		t.Error("TestDatabaseOperationFail schedule task not error")
+		t.Error("TestDatabaseOperationFail recover task not error")
 		t.FailNow()
 	}
-
+	if _, err := getExecuteTimeBy("456"); err == nil {
+		t.Error("TestDatabaseOperationFail get task execute not error")
+		t.FailNow()
+	}
 	execute(&FailTask{
-		ID:  "456",
-		End: time.Now().UTC(),
+		failCount: 0,
+		ID:        "456",
+		End:       time.Now().UTC(),
+	})
+	retry(&FailTask{
+		failCount: 0,
+		ID:        "456",
+		End:       time.Now().UTC(),
 	})
 }

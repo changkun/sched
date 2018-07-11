@@ -43,26 +43,32 @@ func Init(config *Config) error {
 
 // Poll recover tasks from database when application boot up
 func Poll(t Task) error {
-	return initTasks(t)
+	keys, err := getScheduler().db.Keys(prefix + "*").Result()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := recoverTask(t, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Schedule a task
 func Schedule(t Task) error {
-	defer func() {
-		recover()
-	}()
 	s := getScheduler()
 	if err := s.save(t); err != nil {
 		return err
 	}
 
 	runner := getRunnerBy(t.Identifier())
-	if runner.Timer != nil {
+	if runner != nil {
 		// timer Stop() can fail in the following case:
 		//  - a timer has executed: this is not possible in our implementation because timer will be nil after arrival
 		//  - user created a timer directly, without invoking startTimer: not our case
 		// see https://github.com/golang/go/blob/b5375d70d1d626595ec68568b68cc28dddc859d1/src/runtime/time.go#L166
-		runner.Timer.Stop()
+		runner.Stop()
 	}
 	reschedule(t)
 	return nil
@@ -76,16 +82,12 @@ func Boot(t Task) error {
 
 const prefix = "goscheduler:"
 
-var onceManager sync.Once
 var onceSchduler sync.Once
 var worker *scheduler
 
-type taskRunner struct {
-	Timer *time.Timer
-}
 type scheduler struct {
 	db      *redis.Client
-	manager *map[string]*taskRunner
+	manager *sync.Map
 }
 type record struct {
 	Identifier string      `json:"identifier"`
@@ -95,22 +97,19 @@ type record struct {
 
 func getScheduler() *scheduler {
 	onceSchduler.Do(func() {
-		worker = &scheduler{}
+		worker = &scheduler{
+			db:      nil,
+			manager: new(sync.Map),
+		}
 	})
 	return worker
 }
-func getManager() *map[string]*taskRunner {
-	onceManager.Do(func() {
-		getScheduler().manager = &map[string]*taskRunner{}
-	})
-	return getScheduler().manager
-}
-func getRunnerBy(uuid string) *taskRunner {
-	if runner, ok := (*getManager())[uuid]; ok {
-		return runner
+
+func getRunnerBy(uuid string) *time.Timer {
+	if v, ok := getScheduler().manager.Load(uuid); v != nil && ok {
+		return v.(*time.Timer)
 	}
-	(*getManager())[uuid] = &taskRunner{}
-	return (*getManager())[uuid]
+	return nil
 }
 func (s *scheduler) save(t Task) error {
 	bytes, err := json.Marshal(&record{
@@ -126,15 +125,15 @@ func (s *scheduler) save(t Task) error {
 	}
 	return nil
 }
-func initTasks(t Task) error {
-	keys, err := getScheduler().db.Keys(prefix + "*").Result()
+func getExecuteTimeBy(uuid string) (*time.Time, error) {
+	result, err := getScheduler().db.Get(prefix + uuid).Result()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, key := range keys {
-		recoverTask(t, key)
-	}
-	return nil
+	r := &record{}
+	// this is not possible to fail
+	json.Unmarshal([]byte(result), r)
+	return &r.Execution, nil
 }
 func recoverTask(t Task, key string) error {
 	result, err := getScheduler().db.Get(key).Result()
@@ -152,30 +151,36 @@ func recoverTask(t Task, key string) error {
 	return Schedule(temp)
 }
 func reschedule(t Task) {
-	getRunnerBy(t.Identifier()).Timer = time.NewTimer(
+	timer := time.NewTimer(
 		time.Duration(t.GetExecuteTime().Sub(time.Now().UTC())),
 	)
+	getScheduler().manager.Store(t.Identifier(), timer)
 	go func(t Task) {
-		<-getRunnerBy(t.Identifier()).Timer.C
-		getRunnerBy(t.Identifier()).Timer = nil
+		<-timer.C
+		getScheduler().manager.Store(t.Identifier(), nil)
 		execute(t)
 	}(t)
 }
-
 func execute(t Task) {
-	if t.GetExecuteTime().Before(time.Now().UTC()) {
+	execution, err := getExecuteTimeBy(t.Identifier())
+	if err != nil {
+		return
+	}
+	if execution.Before(time.Now().UTC()) {
 		if err := t.Execute(); err != nil {
-			// failed retry
-			t.SetExecuteTime(t.GetExecuteTime().Add(t.FailRetryDuration()))
-			if err := Schedule(t); err != nil {
-				reschedule(t)
-			}
+			retry(t)
 			return
 		}
 		getScheduler().db.Del(prefix + t.Identifier()).Result()
-		delete(*getManager(), t.Identifier())
+		getScheduler().manager.Delete(t.Identifier())
 		return
 	}
 	// no need to stop timer since it already expired
 	reschedule(t)
+}
+func retry(t Task) {
+	t.SetExecuteTime(t.GetExecuteTime().Add(t.FailRetryDuration()))
+	if err := Schedule(t); err != nil {
+		reschedule(t)
+	}
 }
