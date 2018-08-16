@@ -3,25 +3,26 @@
 [![GoDoc](https://godoc.org/github.com/changkun/goscheduler?status.svg)](https://godoc.org/github.com/changkun/goscheduler) [![Build Status](https://travis-ci.org/changkun/goscheduler.svg?branch=master)](https://travis-ci.org/changkun/goscheduler) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/goscheduler)](https://goreportcard.com/report/github.com/changkun/goscheduler) [![codecov](https://codecov.io/gh/changkun/goscheduler/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/goscheduler) ![](https://img.shields.io/github/release/changkun/goscheduler/all.svg)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
-`goscheduler` is a consistently reliable task scheduler library for _GO_, which applies to be a microkernel of an internal application service, and pluggable tasks must implements `goscheduler` Task interface.
+`goscheduler` 是一个 _GO_ 编写的一致可靠的任务调度库，适合作为应用服务内部核心任务调度的一个微内核，任务插件通过实现 `goscheduler` 所定义的接口来完成。
 
-`goscheduler ` not only schedules a task at a specific time or reschedules a planned task immediately, but also flexible to support periodically tasks, which differ from traditional non-consistently unreliable cron task scheduling.
+不同于传统的 cron 周期性不可靠、无容错式调度，`goscheduler` 无需了解 cron 调度语法，却比 cron 更加灵活，
+不仅能支持单次任务执行调度或重新调度现有任务，亦能支持周期式反复调度。
 
-Furthermore, `goscheduler` uses a distributed lock mechanism that ensures tasks can only be executed once across multiple replica instances.
+此外，`goscheduler` 还使用了分布式锁机制保证了多个副本节点的
+分布式任务调度只有一个节点执行所需任务。
 
-## Features
+## 特性
 
-- Thread safety
-- Distributed consistency
-- Schedule a task at a specific time
-- Boot (an existing) task immediately
-- Recover specified type of tasks from database when app restarts
-- Retry if scheduled task faild
+- 线程安全
+- 分布式一致
+- 失败重试
+- 重启时恢复任务
+- 在特定时间点上执行任务
+- 立即执行一个（已经存在）的任务
 
-## Usage
+## 用法
 
-goscheduler uses [Redis](https://redis.io/) for data persistence, 
-it schedules your task at a specific time or boot an existing task immediately.
+goscheduler 使用 [Redis](https://redis.io/) 进行数据持久，在一个特定时间点上调度需要执行的任务
 
 ```go
 package main
@@ -33,7 +34,7 @@ import (
 	"github.com/changkun/goscheduler"
 )
 
-// CustomTask define your custom task struct
+// CustomTask 定义了你需要执行的任务结构体
 type CustomTask struct {
 	ID          string    `json:"uuid"`
 	Start       time.Time `json:"start"`
@@ -41,50 +42,49 @@ type CustomTask struct {
 	Information string    `json:"info"`
 }
 
-// Identifier must returns a unique string for the task, usually can be an UUID
+// Identifier 必须返回一个全局唯一的字符串，通常返回一个 UUID 即可
 func (c CustomTask) Identifier() string {
 	return c.ID
 }
 
-// GetExecuteTime must returns the excute time of the task
+// GetExecuteTime 必须返回任务的执行时间
 func (c CustomTask) GetExecuteTime() time.Time {
 	return c.End
 }
 
-// SetExecuteTime can set the execution time of the task
-// It allows goscheduler set a retry execution time for your task
+// SetExecuteTime 提供给 goscheduler 设置任务的执行时间
 func (c *CustomTask) SetExecuteTime(t time.Time) time.Time {
 	c.End = t
 	return c.End
 }
 
-// Execute defines the actual running task,
-// returning an error means the execution is failed
+// Execute 定义了任务实际运行时的执行方法，当执行失败时，
+// 应返回 error 来告知 goscheduler 。
 func (c *CustomTask) Execute() error {
 	// implement your task execution
 	fmt.Println("Task is Running: ", c.Information)
 	return nil
 }
 
-// FailRetryDuration returns the task retry duration if your task failed
+// FailRetryDuration 返回当任务执行失败时，重试的时间间隔
 func (c CustomTask) FailRetryDuration() time.Duration {
 	return time.Second
 }
 
 func main() {
-	// Init goscheduler database
+	// 初始化 goscheduler 数据库
 	goscheduler.Init(&goscheduler.Config{
 		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
-	// When goscheduler database is initiated,
-	// call Poller to recover all unfinished task
+	// 当 goscheduler 数据库初始化完毕后，
+	// 可以调用 Poll 来恢复尚未完成调度的任务
 	var task CustomTask
 	goscheduler.Poll(&task)
-	// the task variable is only used for determing your task type
-	// the task remains nil after Poll()
+	// task 变量仅用于 goscheduler 内部推导需要调度的任务类型
+	// Poll 调用完毕后 task 变量仍为零值
 
-	// A task should be executed in 10 seconds
+	// 创建一个需要执行的任务
 	task = CustomTask{
 		ID:          "123",
 		Start:       time.Now().UTC(),
@@ -93,12 +93,12 @@ func main() {
 	}
 	fmt.Println("Retry duration if execution failed: ", task.FailRetryDuration())
 
-	// first schedule the task at 10 seconds later
+	// 首次将任务调度为十秒后执行
 	goscheduler.Schedule(&task)
-	// however we decide to boot the task immediately
+	// 由于特殊情况，我们决定立即执行此任务
 	goscheduler.Boot(&task)
 
-	// let's sleep 2 secs wait for the retult of the task
+	// 等待调度的任务结束执行
 	time.Sleep(time.Second * 2)
 }
 ```
