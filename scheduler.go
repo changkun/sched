@@ -9,78 +9,10 @@ import (
 	"github.com/go-redis/redis"
 )
 
-// Task interface defines the task need to be executed
-type Task interface {
-	// Identifier should returns a unique string for the task, usually can return an UUID
-	Identifier() string
-	// GetExecuteTime should returns the excute time of the task
-	GetExecuteTime() time.Time
-	// SetExecuteTime can set the execution time of the task
-	SetExecuteTime(t time.Time) time.Time
-	// Execute defines the actual running task
-	Execute() error
-	// FailRetryDuration returns the task retry duration if fails
-	FailRetryDuration() time.Duration
-}
-
-// Config provides the database URI for goschduler
-type Config struct {
-	DatabaseURI string
-}
-
-// Init creates the connection of database
-func Init(config *Config) error {
-	s := getScheduler()
-	if s.db == nil {
-		option, err := redis.ParseURL(config.DatabaseURI)
-		if err != nil {
-			return err
-		}
-		s.db = redis.NewClient(option)
-	}
-	return nil
-}
-
-// Poll recover tasks from database when application boot up
-func Poll(t Task) error {
-	keys, err := getScheduler().db.Keys(prefix + "*").Result()
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if err := recoverTask(t, key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Schedule a task
-func Schedule(t Task) error {
-	s := getScheduler()
-	if err := s.save(t); err != nil {
-		return err
-	}
-
-	runner := getRunnerBy(t.Identifier())
-	if runner != nil {
-		// timer Stop() can fail in the following case:
-		//  - a timer has executed: this is not possible in our implementation because timer will be nil after arrival
-		//  - user created a timer directly, without invoking startTimer: not our case
-		// see https://github.com/golang/go/blob/b5375d70d1d626595ec68568b68cc28dddc859d1/src/runtime/time.go#L166
-		runner.Stop()
-	}
-	reschedule(t)
-	return nil
-}
-
-// Boot a task immediately
-func Boot(t Task) error {
-	t.SetExecuteTime(time.Now().UTC())
-	return Schedule(t)
-}
-
-const prefix = "goscheduler:"
+const (
+	prefixTask = "goscheduler:task:"
+	prefixLock = "goscheduler:lock:"
+)
 
 var onceSchduler sync.Once
 var worker *scheduler
@@ -95,7 +27,7 @@ type record struct {
 	Data       interface{} `json:"data"`
 }
 
-func getScheduler() *scheduler {
+func newScheduler() *scheduler {
 	onceSchduler.Do(func() {
 		worker = &scheduler{
 			db:      nil,
@@ -104,9 +36,30 @@ func getScheduler() *scheduler {
 	})
 	return worker
 }
-
-func getRunnerBy(uuid string) *time.Timer {
-	if v, ok := getScheduler().manager.Load(uuid); v != nil && ok {
+func (s *scheduler) initDB(url string) error {
+	if s.db == nil {
+		option, err := redis.ParseURL(url)
+		if err != nil {
+			return err
+		}
+		s.db = redis.NewClient(option)
+	}
+	return nil
+}
+func (s *scheduler) recover(t Task) error {
+	keys, err := newScheduler().db.Keys(prefixTask + "*").Result()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := recover(t, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (s *scheduler) getRunner(t Task) *time.Timer {
+	if v, ok := s.manager.Load(t.Identifier()); v != nil && ok {
 		return v.(*time.Timer)
 	}
 	return nil
@@ -120,13 +73,37 @@ func (s *scheduler) save(t Task) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Set(prefix+t.Identifier(), string(bytes), 0).Result(); err != nil {
+	if _, err := s.db.Set(prefixTask+t.Identifier(), string(bytes), 0).Result(); err != nil {
 		return err
 	}
 	return nil
 }
-func getExecuteTimeBy(uuid string) (*time.Time, error) {
-	result, err := getScheduler().db.Get(prefix + uuid).Result()
+func (s *scheduler) store(t Task, v interface{}) {
+	s.manager.Store(t.Identifier(), v)
+}
+func (s *scheduler) delete(t Task) {
+	s.db.Del(prefixTask + t.Identifier()).Result()
+	s.manager.Delete(t.Identifier())
+}
+func (s *scheduler) lock(t Task, expiration time.Duration) (bool, error) {
+	bytes, err := json.Marshal(&record{
+		Identifier: t.Identifier(),
+		Execution:  t.GetExecuteTime(),
+		Data:       t,
+	})
+	if err != nil {
+		return false, err
+	}
+	return s.db.SetNX(prefixLock+t.Identifier(), string(bytes), expiration).Result()
+}
+func (s *scheduler) unlock(t Task) error {
+	if _, err := s.db.Del(prefixLock + t.Identifier()).Result(); err != nil {
+		return err
+	}
+	return nil
+}
+func (s *scheduler) getExecuteTime(t Task) (*time.Time, error) {
+	result, err := s.db.Get(prefixTask + t.Identifier()).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +112,9 @@ func getExecuteTimeBy(uuid string) (*time.Time, error) {
 	json.Unmarshal([]byte(result), r)
 	return &r.Execution, nil
 }
-func recoverTask(t Task, key string) error {
-	result, err := getScheduler().db.Get(key).Result()
+
+func recover(t Task, key string) error {
+	result, err := newScheduler().db.Get(key).Result()
 	if err != nil {
 		return err
 	}
@@ -154,25 +132,41 @@ func reschedule(t Task) {
 	timer := time.NewTimer(
 		time.Duration(t.GetExecuteTime().Sub(time.Now().UTC())),
 	)
-	getScheduler().manager.Store(t.Identifier(), timer)
+	newScheduler().store(t, timer)
 	go func(t Task) {
 		<-timer.C
-		getScheduler().manager.Store(t.Identifier(), nil)
-		execute(t)
+		executeOnce(t)
 	}(t)
 }
+func executeOnce(t Task) {
+	s := newScheduler()
+	// lock the task execution for one scheduler instance
+	// cancel execution if lock error or already locked
+	if ok, err := s.lock(t, time.Second*10); err != nil || !ok {
+		return
+	}
+	// unlock the task after execute, no matter
+	// it excutes success, need reschedule, or should retry
+	defer s.unlock(t)
+
+	execute(t)
+}
+
 func execute(t Task) {
-	execution, err := getExecuteTimeBy(t.Identifier())
+	s := newScheduler()
+	s.store(t, nil)
+	// final check before execution, from database
+	execution, err := s.getExecuteTime(t)
 	if err != nil {
 		return
 	}
 	if execution.Before(time.Now().UTC()) {
 		if err := t.Execute(); err != nil {
+			// no need to unlock the task if failed
 			retry(t)
 			return
 		}
-		getScheduler().db.Del(prefix + t.Identifier()).Result()
-		getScheduler().manager.Delete(t.Identifier())
+		s.delete(t)
 		return
 	}
 	// no need to stop timer since it already expired

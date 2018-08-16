@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"reflect"
 	"sync"
 	"testing"
@@ -20,10 +21,10 @@ func lenSyncMap(m *sync.Map) (length int64) {
 }
 
 func isTaskExists(num int) error {
-	s := getScheduler()
+	s := newScheduler()
 
 	// check if all task record in redis has been removed
-	keys, err := s.db.Keys(prefix + "*").Result()
+	keys, err := s.db.Keys(prefixTask + "*").Result()
 	if err != nil {
 		return errors.New("Interacting with database error: " + err.Error())
 	}
@@ -33,10 +34,10 @@ func isTaskExists(num int) error {
 	return nil
 }
 func isTaskScheduled() error {
-	s := getScheduler()
+	s := newScheduler()
 
 	// check if all task record in redis has been removed
-	keys, err := s.db.Keys(prefix + "*").Result()
+	keys, err := s.db.Keys(prefixTask + "*").Result()
 	if err != nil {
 		return errors.New("Interacting with database error: " + err.Error())
 	}
@@ -45,8 +46,8 @@ func isTaskScheduled() error {
 	}
 
 	// check if manager is not empty
-	if lenSyncMap(getScheduler().manager) != 0 {
-		return errors.New("Manager is not empty: " + fmt.Sprint(getScheduler().manager))
+	if lenSyncMap(newScheduler().manager) != 0 {
+		return errors.New("Manager is not empty: " + fmt.Sprint(newScheduler().manager))
 	}
 	return nil
 }
@@ -61,7 +62,6 @@ func TestInitializer(t *testing.T) {
 }
 
 type CustomTask struct {
-	mutex       sync.Mutex
 	ID          string    `json:"uuid"`
 	Start       time.Time `json:"start"`
 	End         time.Time `json:"end"`
@@ -80,7 +80,7 @@ func (c CustomTask) GetExecuteTime() time.Time {
 	return c.End
 }
 func (c *CustomTask) Execute() error {
-	fmt.Println("Custom Task is Running: ", c.Information, ", time: ", time.Now().UTC())
+	fmt.Println("Custom Task ", c.ID, " is Running: ", c.Information, ", time: ", time.Now().UTC())
 	c.Executed = true
 	return nil
 }
@@ -93,7 +93,7 @@ func TestPoller(t *testing.T) {
 	})
 
 	// prepare data into redis database
-	s := getScheduler()
+	s := newScheduler()
 	start := time.Now().UTC()
 	task1 := &CustomTask{
 		ID:          "123",
@@ -153,8 +153,8 @@ func TestSchedule(t *testing.T) {
 	})
 
 	// check if manager is not empty
-	if lenSyncMap(getScheduler().manager) != 0 {
-		t.Error("manager is not empty: ", getScheduler().manager)
+	if lenSyncMap(newScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", newScheduler().manager)
 		t.FailNow()
 	}
 
@@ -209,8 +209,8 @@ func TestReschedule(t *testing.T) {
 	})
 
 	// check if manager is not empty
-	if lenSyncMap(getScheduler().manager) != 0 {
-		t.Error("manager is not empty: ", getScheduler().manager)
+	if lenSyncMap(newScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", newScheduler().manager)
 		t.FailNow()
 	}
 
@@ -228,7 +228,7 @@ func TestReschedule(t *testing.T) {
 	}
 	// somehow the database has changed
 	// for example the user changed the database manually
-	result, err := getScheduler().db.Get(prefix + "123").Result()
+	result, err := newScheduler().db.Get(prefixTask + "123").Result()
 	if err != nil {
 		t.Error("Get from database error 1")
 		t.FailNow()
@@ -245,7 +245,7 @@ func TestReschedule(t *testing.T) {
 		t.Error("Get from database error 3")
 		t.FailNow()
 	}
-	if _, err := getScheduler().db.Set(prefix+"123", string(bytes), 0).Result(); err != nil {
+	if _, err := newScheduler().db.Set(prefixTask+"123", string(bytes), 0).Result(); err != nil {
 		t.Error("Get from database error 4")
 		t.FailNow()
 	}
@@ -267,8 +267,8 @@ func TestBoot(t *testing.T) {
 	})
 
 	// check if manager is not empty
-	if lenSyncMap(getScheduler().manager) != 0 {
-		t.Error("manager is not empty: ", getScheduler().manager)
+	if lenSyncMap(newScheduler().manager) != 0 {
+		t.Error("manager is not empty: ", newScheduler().manager)
 		t.FailNow()
 	}
 
@@ -324,18 +324,21 @@ func TestSaveFail(t *testing.T) {
 	if err := Schedule(&f); err == nil {
 		t.FailNow()
 	}
+	if _, err := newScheduler().lock(&f, time.Second); err == nil {
+		t.FailNow()
+	}
 }
 
 func TestPollerFail(t *testing.T) {
 	Init(&Config{DatabaseURI: "redis://127.0.0.1:6379/8"})
-	s := getScheduler()
+	s := newScheduler()
 	defer func() {
-		if _, err := s.db.Del(prefix + "777").Result(); err == nil {
+		if _, err := s.db.Del(prefixTask + "777").Result(); err == nil {
 			return
 		}
 		t.FailNow()
 	}()
-	s.db.Set(prefix+"777", "123123123", 0).Result()
+	s.db.Set(prefixTask+"777", "123123123", 0).Result()
 	var c CustomTask
 	Poll(&c)
 }
@@ -394,7 +397,7 @@ func TestDatabaseOperationFail(t *testing.T) {
 		DatabaseURI: "redis://127.0.0.1:6379/8",
 	})
 
-	s := getScheduler()
+	s := newScheduler()
 	s.db.Close()
 	start := time.Now().UTC()
 	task := &CustomTask{
@@ -412,13 +415,21 @@ func TestDatabaseOperationFail(t *testing.T) {
 		t.Error("TestDatabaseOperationFail poll task not error")
 		t.FailNow()
 	}
-	if err := recoverTask(task, "random"); err == nil {
+	executeOnce(task)
+	if err := recover(task, "random"); err == nil {
 		t.Error("TestDatabaseOperationFail recover task not error")
 		t.FailNow()
 	}
-	if _, err := getExecuteTimeBy("456"); err == nil {
+	if _, err := s.getExecuteTime(task); err == nil {
 		t.Error("TestDatabaseOperationFail get task execute not error")
 		t.FailNow()
+	}
+
+	if _, err := s.lock(task, time.Second); err == nil {
+		t.Error("TestDatabaseOperationFail lock task not error")
+	}
+	if err := s.unlock(task); err == nil {
+		t.Error("TestDatabaseOperationFail unlock task not error")
 	}
 	execute(&FailTask{
 		failCount: 0,
@@ -430,4 +441,69 @@ func TestDatabaseOperationFail(t *testing.T) {
 		ID:        "456",
 		End:       time.Now().UTC(),
 	})
+}
+
+func emptyTime() time.Time {
+	for {
+		if err := isTaskExists(0); err != nil {
+			continue
+		}
+		break
+	}
+	return time.Now().UTC()
+}
+func waitSchedule() {
+	for {
+		if err := isTaskExists(0); err != nil {
+			continue
+		}
+		break
+	}
+	return
+}
+
+func uuid() string {
+	out, _ := exec.Command("uuidgen").Output()
+	return string(out)
+}
+
+func BenchmarkSchedulerDelay(b *testing.B) {
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
+	})
+	// Schedule all tasks and end at the same time.
+	t1 := time.Now()
+	for i := 0; i < b.N; i++ {
+		Schedule(&CustomTask{
+			ID:          uuid(),
+			Start:       time.Now(),
+			End:         time.Now(),
+			Information: "Benchmark Schedule Task",
+		})
+		waitSchedule()
+	}
+	t2 := time.Now()
+	fmt.Println("Average scheduling delay: ", t2.Sub(t1)/time.Duration(int64(b.N)))
+}
+
+func BenchmarkSchedulerConcurrency(b *testing.B) {
+	Init(&Config{
+		DatabaseURI: "redis://127.0.0.1:6379/8",
+	})
+	t1 := time.Now().UTC()
+	endTime := t1.Add(time.Second * 2)
+	// Schedule all tasks and end at the same time.
+	for i := 0; i < b.N; i++ {
+		Schedule(&CustomTask{
+			ID:          uuid(),
+			Start:       t1,
+			End:         endTime,
+			Information: "Benchmark Schedule Task",
+		})
+	}
+	// Sleep until the end time
+	time.Sleep(endTime.Sub(time.Now().UTC()))
+	t2 := emptyTime()
+	fmt.Println("Total   delay time: ", t2.Sub(endTime))
+	fmt.Println("Average delay time: ", t2.Sub(endTime)/time.Duration(int64(b.N)))
 }
