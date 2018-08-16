@@ -75,9 +75,9 @@ func main() {
 	// When goscheduler database is initiated,
 	// call Poller to recover all unfinished task
 	var task CustomTask
-    goscheduler.Poll(&task)
-    // the task variable is only used for determing your task type
-    // the task remains nil after Poll()
+	goscheduler.Poll(&task)
+	// the task variable is only used for determing your task type
+	// the task remains nil after Poll()
 
 	// A task should be executed in 10 seconds
 	task = CustomTask{
