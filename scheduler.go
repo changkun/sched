@@ -137,7 +137,6 @@ func (s *Scheduler) schedule(t task.Interface) {
 	}
 
 	s.queue.Push(t)
-	return
 }
 
 func (s *Scheduler) pause() {
