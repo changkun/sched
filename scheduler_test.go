@@ -173,16 +173,16 @@ func TestScheduleRecover(t *testing.T) {
 		if e.After(max) {
 			max = e
 		}
-		store.Save(&ArbitraryTask{
+		assert.Nil(t, store.Save(&ArbitraryTask{
 			Info:      "hello world!",
 			Retry:     false,
 			id:        fmt.Sprintf("task%d", i),
 			execution: e,
-		})
+		}), "store must success!")
 	}
 
 	s := goscheduler.New()
-	s.RecoverAll(&ArbitraryTask{})
+	assert.Nil(t, s.RecoverAll(&ArbitraryTask{}), "recover must success!")
 
 	strictSleep(max.Add(time.Second * 3))
 

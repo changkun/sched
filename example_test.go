@@ -62,9 +62,15 @@ func ExampleScheduler_Recover() {
 		id:        "task-unique-id",
 		execution: execution,
 	}
-	store.Save(task)
+	if err := store.Save(task); err != nil {
+		fmt.Println("store task-unique-id error: ", err)
+		return
+	}
 
-	goscheduler.New().Recover(&ExampleTask{})
+	if err := goscheduler.New().Recover(&ExampleTask{}); err != nil {
+		fmt.Println("recover task-unique-id error: ", err)
+		return
+	}
 	strictSleep(execution.Add(time.Second))
 
 	// Output:

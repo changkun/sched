@@ -84,7 +84,9 @@ func main() {
 	f, _ := os.Create("bench.trace")
 	defer f.Close()
 
-	trace.Start(f)
+	if err := trace.Start(f); err != nil {
+		panic(err)
+	}
 	defer trace.Stop()
 
 	goscheduler.Init("redis://127.0.0.1:6379/1")
@@ -108,8 +110,12 @@ func main() {
 		})
 	}
 	s := goscheduler.New()
-	for _, task := range tasks {
-		go s.SetupAll(task)
+	for _, t := range tasks {
+		go func(t *task) {
+			if err := s.SetupAll(t); err != nil {
+				fmt.Printf("setup task %s error: %s\n", t.GetID(), err.Error())
+			}
+		}(t)
 	}
 	strictSleep(start.Add(time.Second * 13))
 

@@ -104,17 +104,10 @@ func (s *Scheduler) SetupAll(ts ...task.Interface) error {
 // Setup a task into runner queue
 func (s *Scheduler) Setup(t task.Interface) error {
 	// save asap
-	store.Save(t)
-
-	s.pause()
-	defer s.resume()
-
-	// if priority is able to be update
-	if s.queue.Update(t) {
-		return nil
+	if err := store.Save(t); err != nil {
+		return err
 	}
-
-	s.queue.Push(t)
+	s.schedule(t)
 	return nil
 }
 
@@ -132,6 +125,19 @@ func (s *Scheduler) LaunchAll(ts ...task.Interface) error {
 func (s *Scheduler) Launch(t task.Interface) error {
 	t.SetExecution(time.Now().UTC())
 	return s.Setup(t)
+}
+
+func (s *Scheduler) schedule(t task.Interface) {
+	s.pause()
+	defer s.resume()
+
+	// if priority is able to be update
+	if s.queue.Update(t) {
+		return
+	}
+
+	s.queue.Push(t)
+	return
 }
 
 func (s *Scheduler) pause() {
@@ -168,14 +174,22 @@ func (s *Scheduler) arrival(t task.Interface) {
 	if err != nil || !ok {
 		return
 	}
-	defer store.Unlock(t)
+	defer func(t task.Interface) {
+		if err := store.Unlock(t); err != nil {
+			// no need to hadle unlock fail
+			// since there is a timeout on redis
+			return
+		}
+	}(t)
 
 	s.execute(t)
 }
 
 func (s *Scheduler) verify(t task.Interface) (*time.Time, error) {
 	r := &store.Record{}
-	r.Read(t.GetID())
+	if err := r.Read(t.GetID()); err != nil {
+		return nil, err
+	}
 	taskTime := t.GetExecution()
 	if taskTime.Before(r.Execution) {
 		return &r.Execution, nil
@@ -193,8 +207,14 @@ func (s *Scheduler) execute(t task.Interface) {
 			s.retry(t)
 			return
 		}
-		// TODO: this may fail, how to solve
-		store.Delete(t)
+		if err := store.Delete(t); err != nil {
+			// TODO: Generally, this is not able to be fail.
+			// However it may caused by the lost of connection.
+			// Though task will be recovered then app restarts,
+			// but it may leads an inconsistency, we need other
+			// means to solve this problem
+			return
+		}
 		return
 	}
 	s.mu.Lock()
@@ -204,5 +224,11 @@ func (s *Scheduler) execute(t task.Interface) {
 
 func (s *Scheduler) retry(t task.Interface) {
 	t.SetExecution(t.GetExecution().Add(t.GetRetryDuration()))
-	s.Setup(t)
+	if err := s.Setup(t); err != nil {
+		// If Setup() is fail because of redis failure,
+		// directly schedule the task without any hesitate
+		// In case it may leads a problem of unabiding task
+		// scheduling
+		s.schedule(t)
+	}
 }
