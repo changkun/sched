@@ -9,24 +9,23 @@
 
 Furthermore, `goscheduler` uses priority queue schedules all tasks and a distributed lock mechanism that ensures tasks can only be executed once across multiple replica instances.
 
+## Features
 
-## Design Goal
-
+- **Flexible Scheduling** 
+  - Single execution, period-equally execution, period-inequally execution
+- **Microkernel Embedding**
+  - Embedding into an application without change existing code
 - **Distributed Reliability**
   - A task can only be executed once across replica instances
 - **Eventually Consistency**
   - All tasks that scheduled must be executed eventually
-- **Fault-Tolerance**
+- **Fault Tolerance**
   - Recover when restart, retry if needed or on error
-- **Pluggable Embedding**
-  - Embedded into application
-- **Flexiable Scheduling** 
-  - Single execution, period-equally execution, period-inequally execution
 
 ## Benchmarks
 
-TODO:
+See [benchmarks](./benchmarks/bench.md) getting to know more analysis of `goscheduler` performance.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) &copy; [Changkun Ou](https://changkun.de)
