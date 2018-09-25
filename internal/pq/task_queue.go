@@ -1,54 +1,72 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package pq
 
 import (
 	"container/heap"
 	"sync"
 
-	"github.com/changkun/goscheduler/task"
+	"github.com/changkun/sched/task"
 )
 
-// TimerTaskQueue .
-type TimerTaskQueue struct {
+// TaskQueue implements a timer queue based on a heap
+// Its supports bi-direction accessing, such as access value by key
+// or access key by its value
+//
+//               Time Complexity      Space Complexity
+//   New()             O(1)                 O(1)
+//   Len()             O(1)                 O(1)
+//   Push()    O(log(n)) on average         O(1)
+//   Pop()     O(log(n)) on average         O(1)
+//   Peek()        O(log(n))                O(1)
+//   Update()  O(log(n)) on average         O(1)
+//
+// Total space complexity: O(n + n) where n = queue.Len(), which is
+// a slice + a loopup hash table(map).
+//
+// Worst case for "on average" is O(n)
+type TaskQueue struct {
 	heap   *itemHeap
 	lookup map[string]*Item
 	mu     sync.Mutex
 }
 
-// NewTimerTaskQueue .
-func NewTimerTaskQueue() *TimerTaskQueue {
+// NewTaskQueue .
+func NewTaskQueue() *TaskQueue {
 	pq := &itemHeap{}
 	heap.Init(pq) // O(1) due to empty queue
-	return &TimerTaskQueue{
+	return &TaskQueue{
 		heap:   pq,
 		lookup: map[string]*Item{},
 	}
 }
 
 // Len of queue
-func (m *TimerTaskQueue) Len() int {
+func (m *TaskQueue) Len() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	length := m.heap.Len()
-	return length
+	return m.heap.Len()
 }
 
 // Push item
-func (m *TimerTaskQueue) Push(t task.Interface) {
+func (m *TaskQueue) Push(t task.Interface) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	_, ok := m.lookup[t.GetID()] // O(1) on average
 	if ok {
-		return
+		return false
 	}
 	item := NewItem(t)
 	heap.Push(m.heap, item)    // O(log(n))
 	m.lookup[t.GetID()] = item // O(1)
+	return true
 }
 
 // Pop item
-func (m *TimerTaskQueue) Pop() task.Interface {
+func (m *TaskQueue) Pop() task.Interface {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -62,7 +80,7 @@ func (m *TimerTaskQueue) Pop() task.Interface {
 }
 
 // Peek the top priority item without deletion
-func (m *TimerTaskQueue) Peek() task.Interface {
+func (m *TaskQueue) Peek() task.Interface {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -70,13 +88,13 @@ func (m *TimerTaskQueue) Peek() task.Interface {
 		return nil
 	}
 
-	item := m.heap.Pop()      // O(log(n))
-	m.heap.Push(item.(*Item)) // O(log(n))
-	return item.(*Item).Value
+	item := heap.Pop(m.heap).(*Item) // O(log(n))
+	heap.Push(m.heap, item)          // O(log(n))
+	return item.Value
 }
 
 // Update of a given task
-func (m *TimerTaskQueue) Update(t task.Interface) bool {
+func (m *TaskQueue) Update(t task.Interface) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -86,6 +104,7 @@ func (m *TimerTaskQueue) Update(t task.Interface) bool {
 	}
 
 	item.priority = t.GetExecution()
-	m.heap.Fix(item) // O(log(n))
+	item.Value = t
+	heap.Fix(m.heap, item.index) // O(log(n))
 	return true
 }

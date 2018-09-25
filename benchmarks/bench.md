@@ -1,4 +1,4 @@
-# `goscheduler` Benchmarks
+# `sched` Benchmarks
 
 [![](https://img.shields.io/badge/language-English-blue.svg)](./bench.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./bench_cn.md) 
 
@@ -11,8 +11,8 @@ There is a benchmark senario in [./main.go](./main.go), in detail:
 ## Conclusions
 
 1. Precision of scheduling depends on Go `time.Timer` and interacting performance with Redis
-2. In a extensive task scheduling senario, `goscheduler` meets a small delay, but still reliable
-3. `goscheduler` minimizes running goroutines during scheduling
+2. In a extensive task scheduling senario, `sched` meets a small delay, but still reliable
+3. `sched` minimizes running goroutines during scheduling
 
 ## 2 Tasks
 

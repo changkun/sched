@@ -1,8 +1,8 @@
-# `goscheduler` 性能测试
+# `sched` 性能测试
 
 [![](https://img.shields.io/badge/language-English-blue.svg)](./bench.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./bench_cn.md) 
 
-`goscheduler` 测试了 [./main.go](./main.go) 中所示代码的调度性能。具体的调度场景是：
+`sched` 测试了 [./main.go](./main.go) 中所示代码的调度性能。具体的调度场景是：
 
 1. 每个调度的任务会执行 `retry` 次
 2. 一共调度 `total` 个执行时间随机分布的任务
@@ -12,7 +12,7 @@
 
 1. 任务调度的精度取决于 Go `time.Timer` 以及与 Redis 的交互性能
 2. 在密集型调度的场景中会出现一定程度延迟，但调度仍然是可靠的
-3. `goscheduler` 在调度过程中尽可能低的减少了并发执行的 goroutine 数
+3. `sched` 在调度过程中尽可能低的减少了并发执行的 goroutine 数
 
 ## 2 项任务
 

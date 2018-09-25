@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/changkun/goscheduler"
+	"github.com/changkun/sched"
 )
 
 type task struct {
@@ -47,7 +47,7 @@ func (c *task) SetExecution(t time.Time) (old time.Time) {
 
 const (
 	retry = 3
-	total = 1000
+	total = 100
 )
 
 var (
@@ -89,7 +89,8 @@ func main() {
 	}
 	defer trace.Stop()
 
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	sched.Init("redis://127.0.0.1:6379/1")
+
 	start := time.Now().UTC()
 	min := start.Add(time.Millisecond * 10000)
 	max := start
@@ -109,10 +110,10 @@ func main() {
 			execution: e,
 		})
 	}
-	s := goscheduler.New()
+	s := sched.New()
 	for _, t := range tasks {
 		go func(t *task) {
-			if err := s.SetupAll(t); err != nil {
+			if err := s.Setup(t); err != nil {
 				fmt.Printf("setup task %s error: %s\n", t.GetID(), err.Error())
 			}
 		}(t)

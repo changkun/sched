@@ -1,4 +1,4 @@
-package goscheduler
+package sched
 
 import (
 	"encoding/json"
@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/changkun/goscheduler/internal/pool"
-	"github.com/changkun/goscheduler/internal/pq"
-	"github.com/changkun/goscheduler/internal/store"
-	"github.com/changkun/goscheduler/task"
+	"github.com/changkun/sched/internal/pool"
+	"github.com/changkun/sched/internal/pq"
+	"github.com/changkun/sched/internal/store"
+	"github.com/changkun/sched/task"
 )
 
 var (
@@ -21,7 +21,7 @@ var (
 type Scheduler struct {
 	mu    *sync.Mutex
 	timer *time.Timer
-	queue *pq.TimerTaskQueue
+	queue *pq.TaskQueue
 }
 
 // Init internal connection pool to data store
@@ -35,32 +35,36 @@ func New() *Scheduler {
 		worker = &Scheduler{
 			mu:    &sync.Mutex{},
 			timer: nil,
-			queue: pq.NewTimerTaskQueue(),
+			queue: pq.NewTaskQueue(),
 		}
 	})
 	return worker
 }
 
-// RecoverAll given tasks
-func (s *Scheduler) RecoverAll(ts ...task.Interface) error {
-	for _, t := range ts {
-		if err := s.Recover(t); err != nil {
+// Recover given tasks
+func Recover(ts ...task.Interface) error {
+	return New().Recover(ts...)
+}
+
+// Recover given tasks
+func (s *Scheduler) Recover(ts ...task.Interface) error {
+	for i := range ts {
+		if err := s.recover(ts[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Recover given task type
-func (s *Scheduler) Recover(t task.Interface) error {
+func (s *Scheduler) recover(t task.Interface) error {
 	ids, err := store.GetRecords()
 	if err != nil {
 		return err
 	}
 
-	for _, id := range ids {
+	for i := range ids {
 		r := &store.Record{}
-		if err := r.Read(id); err != nil {
+		if err := r.Read(ids[i]); err != nil {
 			return err
 		}
 
@@ -83,7 +87,7 @@ func (s *Scheduler) Recover(t task.Interface) error {
 		if reflect.DeepEqual(temp1, temp2) {
 			continue
 		}
-		temp2.SetID(id)
+		temp2.SetID(ids[i])
 		temp2.SetExecution(r.Execution)
 		s.queue.Push(temp2)
 	}
@@ -91,18 +95,22 @@ func (s *Scheduler) Recover(t task.Interface) error {
 	return nil
 }
 
-// SetupAll given tasks
-func (s *Scheduler) SetupAll(ts ...task.Interface) error {
-	for _, t := range ts {
-		if err := s.Setup(t); err != nil {
+// Setup given tasks
+func Setup(ts ...task.Interface) error {
+	return New().Setup(ts...)
+}
+
+// Setup given tasks
+func (s *Scheduler) Setup(ts ...task.Interface) error {
+	for i := range ts {
+		if err := s.setup(ts[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Setup a task into runner queue
-func (s *Scheduler) Setup(t task.Interface) error {
+func (s *Scheduler) setup(t task.Interface) error {
 	// save asap
 	if err := store.Save(t); err != nil {
 		return err
@@ -111,18 +119,22 @@ func (s *Scheduler) Setup(t task.Interface) error {
 	return nil
 }
 
-// LaunchAll given tasks
-func (s *Scheduler) LaunchAll(ts ...task.Interface) error {
-	for _, t := range ts {
-		if err := s.Launch(t); err != nil {
+// Launch given tasks immediately
+func Launch(ts ...task.Interface) error {
+	return New().Launch(ts...)
+}
+
+// Launch given tasks immediately
+func (s *Scheduler) Launch(ts ...task.Interface) error {
+	for i := range ts {
+		if err := s.launch(ts[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Launch a task immediately
-func (s *Scheduler) Launch(t task.Interface) error {
+func (s *Scheduler) launch(t task.Interface) error {
 	t.SetExecution(time.Now().UTC())
 	return s.Setup(t)
 }
@@ -139,13 +151,24 @@ func (s *Scheduler) schedule(t task.Interface) {
 	s.queue.Push(t)
 }
 
-func (s *Scheduler) pause() {
+func (s *Scheduler) setTimer(duration time.Duration) {
+	s.mu.Lock()
+	s.timer = time.NewTimer(duration)
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) getTimer() *time.Timer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.timer
+}
 
+func (s *Scheduler) pause() {
+	s.mu.Lock()
 	if s.timer != nil {
 		s.timer.Stop()
 	}
+	s.mu.Unlock()
 }
 
 func (s *Scheduler) resume() {
@@ -153,12 +176,9 @@ func (s *Scheduler) resume() {
 	if t == nil {
 		return
 	}
-	s.mu.Lock()
-	s.timer = time.NewTimer(t.GetExecution().Sub(time.Now().UTC()))
-	timer := s.timer
-	s.mu.Unlock()
+	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
 	go func() {
-		<-timer.C
+		<-s.getTimer().C
 		t := s.queue.Pop()
 		if t == nil {
 			return
@@ -173,15 +193,14 @@ func (s *Scheduler) arrival(t task.Interface) {
 	if err != nil || !ok {
 		return
 	}
-	defer func(t task.Interface) {
-		if err := store.Unlock(t); err != nil {
-			// no need to hadle unlock fail
-			// since there is a timeout on redis
-			return
-		}
-	}(t)
 
 	s.execute(t)
+
+	if err := store.Unlock(t); err != nil {
+		// no need to hadle unlock fail
+		// since there is a timeout on redis
+		return
+	}
 }
 
 func (s *Scheduler) verify(t task.Interface) (*time.Time, error) {
@@ -200,14 +219,14 @@ func (s *Scheduler) execute(t task.Interface) {
 	if err != nil {
 		return
 	}
-	if execution.Before(time.Now().UTC()) {
+	if execution.Sub(time.Now().UTC()) < time.Second {
 		retry, err := t.Execute()
 		if retry || err != nil {
 			s.retry(t)
 			return
 		}
 		if err := store.Delete(t); err != nil {
-			// TODO: Generally, this is not able to be fail.
+			// NOTE: Generally, this is not able to be fail.
 			// However it may caused by the lost of connection.
 			// Though task will be recovered then app restarts,
 			// but it may leads an inconsistency, we need other
@@ -216,9 +235,10 @@ func (s *Scheduler) execute(t task.Interface) {
 		}
 		return
 	}
-	s.mu.Lock()
-	s.queue.Push(t)
-	s.mu.Unlock()
+
+	// reschedule task, we must save the task again by using s.Setup
+	t.SetExecution(*execution)
+	s.Setup(t)
 }
 
 func (s *Scheduler) retry(t task.Interface) {

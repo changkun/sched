@@ -1,11 +1,11 @@
-package goscheduler_test
+package sched_test
 
 import (
 	"fmt"
 	"time"
 
-	"github.com/changkun/goscheduler"
-	"github.com/changkun/goscheduler/internal/store"
+	"github.com/changkun/sched"
+	"github.com/changkun/sched/internal/store"
 )
 
 type ExampleTask struct {
@@ -47,7 +47,7 @@ func (c *ExampleTask) Execute() (bool, error) {
 
 func ExampleInit() {
 
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	sched.Init("redis://127.0.0.1:6379/1")
 	// Output:
 	//
 
@@ -55,7 +55,7 @@ func ExampleInit() {
 
 func ExampleScheduler_Recover() {
 
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	sched.Init("redis://127.0.0.1:6379/1")
 	execution := time.Now().UTC().Add(time.Second)
 	task := &ExampleTask{
 		Info:      "hello world!",
@@ -63,12 +63,12 @@ func ExampleScheduler_Recover() {
 		execution: execution,
 	}
 	if err := store.Save(task); err != nil {
-		fmt.Println("store task-unique-id error: ", err)
+		fmt.Printf("store task-unique-id error: %v\n", err)
 		return
 	}
 
-	if err := goscheduler.New().Recover(&ExampleTask{}); err != nil {
-		fmt.Println("recover task-unique-id error: ", err)
+	if err := sched.Recover(&ExampleTask{}); err != nil {
+		fmt.Printf("recover task-unique-id error: %v\n", err)
 		return
 	}
 	strictSleep(execution.Add(time.Second))
@@ -79,7 +79,7 @@ func ExampleScheduler_Recover() {
 
 func ExampleScheduler_Setup() {
 
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	sched.Init("redis://127.0.0.1:6379/1")
 
 	execution := time.Now().UTC().Add(time.Second)
 	task := &ExampleTask{
@@ -87,8 +87,8 @@ func ExampleScheduler_Setup() {
 		id:        "task-unique-id",
 		execution: execution,
 	}
-	if err := goscheduler.New().Setup(task); err != nil {
-		fmt.Println("Schedule task failed: ", err)
+	if err := sched.Setup(task); err != nil {
+		fmt.Printf("Schedule task failed: %v\n", err)
 	}
 	strictSleep(execution.Add(time.Second))
 
@@ -99,7 +99,7 @@ func ExampleScheduler_Setup() {
 
 func ExampleScheduler_Launch() {
 
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	sched.Init("redis://127.0.0.1:6379/1")
 
 	execution := time.Now().UTC().Add(time.Second * 10)
 	task := &ExampleTask{
@@ -107,12 +107,12 @@ func ExampleScheduler_Launch() {
 		id:        "task-unique-id",
 		execution: execution,
 	}
-	if err := goscheduler.New().Setup(task); err != nil {
-		fmt.Println("Schedule task failed: ", err)
+	if err := sched.Setup(task); err != nil {
+		fmt.Printf("Schedule task failed: %v\n", err)
 	}
 
-	if err := goscheduler.New().Launch(task); err != nil {
-		fmt.Println("Schedule task failed: ", err)
+	if err := sched.Launch(task); err != nil {
+		fmt.Printf("Schedule task failed: %v\n", err)
 	}
 	strictSleep(time.Now().UTC().Add(time.Second))
 
