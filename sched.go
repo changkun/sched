@@ -1,3 +1,7 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package sched
 
 import (
@@ -214,32 +218,6 @@ func (s *Scheduler) verify(t task.Interface) (*time.Time, error) {
 	}
 	return &taskTime, nil
 }
-func (s *Scheduler) execute(t task.Interface) {
-	execution, err := s.verify(t)
-	if err != nil {
-		return
-	}
-	if execution.Sub(time.Now().UTC()) < time.Second {
-		retry, err := t.Execute()
-		if retry || err != nil {
-			s.retry(t)
-			return
-		}
-		if err := store.Delete(t); err != nil {
-			// NOTE: Generally, this is not able to be fail.
-			// However it may caused by the lost of connection.
-			// Though task will be recovered then app restarts,
-			// but it may leads an inconsistency, we need other
-			// means to solve this problem
-			return
-		}
-		return
-	}
-
-	// reschedule task, we must save the task again by using s.Setup
-	t.SetExecution(*execution)
-	s.Setup(t)
-}
 
 func (s *Scheduler) retry(t task.Interface) {
 	t.SetExecution(t.GetExecution().Add(t.GetRetryDuration()))
@@ -250,4 +228,31 @@ func (s *Scheduler) retry(t task.Interface) {
 		// scheduling
 		s.schedule(t)
 	}
+}
+
+func (s *Scheduler) execute(t task.Interface) {
+	execution, err := s.verify(t)
+	if err != nil {
+		return
+	}
+	// for timer tollerance
+	if execution.Sub(time.Now().UTC()) < time.Millisecond {
+		retry, err := t.Execute()
+		if retry || err != nil {
+			s.retry(t)
+			return
+		}
+		if err := store.Delete(t); err != nil {
+			// NOTE: Generally this is not able to be fail.
+			// However it may caused by the lost of connection.
+			// Though task will be recovered then app restarts,
+			// but it may leads an inconsistency, we need other
+			// means to solve this problem
+			return
+		}
+		return
+	}
+	// reschedule task, we must save the task again by using s.Setup
+	t.SetExecution(*execution)
+	s.Setup(t)
 }

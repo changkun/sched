@@ -74,7 +74,7 @@ func TestStoreLockUnlock(t *testing.T) {
 	}
 
 	// Lock again
-	ok, err = store.Lock(task)
+	_, err = store.Lock(task)
 	if err == nil {
 		t.Fatal("lock task return non nil: ", err)
 	}
