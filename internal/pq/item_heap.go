@@ -1,10 +1,13 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package pq
 
 import (
-	"container/heap"
 	"time"
 
-	"github.com/changkun/goscheduler/task"
+	"github.com/changkun/sched/task"
 )
 
 // An Item is something we manage in a priority queue.
@@ -52,8 +55,4 @@ func (pq *itemHeap) Push(x interface{}) {
 	item := x.(*Item)
 	item.index = len(*pq)
 	*pq = append(*pq, item)
-}
-
-func (pq *itemHeap) Fix(item *Item) {
-	heap.Fix(pq, item.index)
 }

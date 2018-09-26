@@ -1,46 +1,53 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 /*
-Package goscheduler implements a consistently reliable task scheduler
+Package sched provides a consistently reliable task scheduler
 
 Introduction
 
-goscheduler is a consistently reliable embedded task scheduler package for GO, which applies
-to be a microkernel of an internal application service, and pluggable tasks must implements
-goscheduler Task interface.
+sched is a consistently reliable embedded task scheduler library for GO.
+It applies to be a microkernel of an internal application service, and
+pluggable tasks must implements sched Task interface.
 
-goscheduler not only schedules a task at a specific time or reschedules a planned task immediately,
-but also flexible to support periodically tasks, which differ from traditional non-consistently
-unreliable cron task scheduling.
+sched not only schedules a task at a specific time or reschedules a planned
+task immediately, but also flexible to support periodically tasks, which
+differ from traditional non-consistently unreliable cron task scheduling.
 
-Furthermore, goscheduler uses priority queue schedules all tasks, and
-a distributed lock mechanism that ensures tasks can only be executed once across multiple
-replica instances.
+Furthermore, sched manage tasks, like goroutine runtime scheduler, uses
+priority queue schedules all tasks and a distributed lock mechanism that
+ensures tasks can only be executed once across multiple replica instances.
 
 Usage
 
-Callers must initialize goscheduler database to use goschduler.
+Callers must initialize sched database to use goschduler.
 goschduler schedules different tasks in a priority queue and schedules task with minimum goroutines when tasks with same execution time arrival:
 
-	// Init goscheduler database
-	goscheduler.Init("redis://127.0.0.1:6379/1")
+	// Init sched database
+	sched.Init("redis://127.0.0.1:6379/1")
 
 	// Create a temporal scheduler
-	s := goscheduler.New()
+	s := sched.New()
 
-	// Recover task
-	s.RecoverAll(
-		&ArbitraryTask1{},
-		&ArbitraryTask2{},
-	)
+	// Recover tasks
+	s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+	// or
+	// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
 
-	// Setup a task
-	s.Setup(&ArbitraryTask{...})
+	// Setup tasks
+	s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	// or
+	// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 	// Launch a task
-	s.Launch(&ArbitraryTask{...})
+	s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	// or
+	// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 Task interface
 
-A Task that can be scheduled by goscheduler must implements the following methods:
+A Task that can be scheduled by sched must implements the following methods:
 
 	// Interface for a schedulable
 	type Interface interface {
@@ -55,7 +62,5 @@ A Task that can be scheduled by goscheduler must implements the following method
 
 Note that your task must be a serilizable struct by `json.Marshal()`,
 otherwise it cannot be persist by goshceudler (e.g. `type Func func()` cannot be scheduled)
-
-
 */
-package goscheduler
+package sched

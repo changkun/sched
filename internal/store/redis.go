@@ -1,9 +1,13 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package store
 
 import (
 	"time"
 
-	"github.com/changkun/goscheduler/internal/pool"
+	"github.com/changkun/sched/internal/pool"
 	"github.com/gomodule/redigo/redis"
 )
 
@@ -33,11 +37,11 @@ func DEL(key string) (err error) {
 	return
 }
 
-// SETEX command of redis
-func SETEX(key string, value string, expire time.Duration) (ok bool, err error) {
+// SETNX command of redis
+func SETNX(key string, value string, expire time.Duration) (ok bool, err error) {
 	conn := pool.Get()
 	defer conn.Close()
-	reply, err := redis.String(conn.Do("SETEX", key, expire.Seconds(), value))
+	reply, err := redis.String(conn.Do("SET", key, value, "EX", expire.Seconds(), "NX"))
 	if reply != "OK" {
 		ok = false
 		return

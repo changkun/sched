@@ -1,5 +1,5 @@
 bench: clean
-	go build -o bench main.go
+	go build -o bench sched.go
 	./bench
 
 trace:

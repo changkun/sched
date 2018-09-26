@@ -1,75 +1,94 @@
+// Copyright 2018 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package pq
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/changkun/sched/tests"
 )
 
-type Task struct {
-	id        string
-	execution time.Time
-}
-
-func (t *Task) GetID() (id string) {
-	id = t.id
-	return
-}
-func (t *Task) GetExecution() (execute time.Time) {
-	execute = t.execution
-	return
-}
-func (t *Task) GetTimeout() (executeTimeout time.Duration) {
-	return time.Second
-}
-func (t *Task) GetRetryDuration() (duration time.Duration) {
-	return time.Second
-}
-func (t *Task) SetID(id string) {
-	t.id = id
-}
-func (t *Task) SetExecution(current time.Time) (old time.Time) {
-	old = t.execution
-	t.execution = current
-	return
-}
-func (t *Task) Execute() (retry bool, fail error) {
-	fmt.Println("queue task execute: ", t.id)
-	return false, nil
-}
 func TestTaskQueue(t *testing.T) {
 	// Some items and their priorities.
 	start := time.Now().UTC()
-	pqueue := NewTimerTaskQueue()
+	tpq := NewTaskQueue()
 
 	// Insert a new item and then modify its priority.
-	task := &Task{
-		id:        uuid.Must(uuid.NewRandom()).String(),
-		execution: start.Add(time.Millisecond * 5),
+	task := tests.NewTask("task-0", start.Add(time.Millisecond*1))
+	tpq.Push(task)
+
+	// Insert a new item and then modify its priority.
+	wg := sync.WaitGroup{}
+	for i := 1; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			// the task should ordered by task-number
+			task := tests.NewTask(fmt.Sprintf("task-%d", i), start.Add(time.Millisecond*5*time.Duration(i)))
+			tpq.Push(task)
+			wg.Done()
+		}(i)
 	}
-	pqueue.Push(task)
+	wg.Wait()
 
-	// Insert a new item and then modify its priority.
-	for i := 0; i < 30000; i++ {
-		fmt.Println("push peek pop ", i)
-		task = &Task{
-			id:        uuid.Must(uuid.NewRandom()).String(),
-			execution: start.Add(time.Millisecond * 5),
+	p := tpq.Peek()
+	if p.GetID() != "task-0" {
+		t.Errorf("first task must have id of task-0")
+	}
+
+	for i := 0; i < 10; i++ {
+		task := tests.NewTask(fmt.Sprintf("task-%d", i), start.Add(-time.Millisecond*5*time.Duration(i)))
+		tpq.Update(task)
+	}
+
+	l := tpq.Len()
+	for i := 0; i < l; i++ {
+		task := tpq.Pop()
+		want := fmt.Sprintf("task-%d", l-1-i)
+		if task.GetID() != want {
+			t.Errorf("task has improper task id, want %s, got %s", want, task.GetID())
 		}
-		go pqueue.Push(task)
-		go pqueue.Peek()
-		go pqueue.Update(task)
-		go pqueue.Pop()
 	}
+}
 
-	fmt.Printf("peek: %v\n", pqueue.Peek())
-	// Take the items out; they arrive in decreasing priority order.
-	count := 0
-	for pqueue.Len() > 0 {
-		task := pqueue.Pop()
-		count++
-		fmt.Printf("pop: %v, count: %d\n", task, count)
+func TestTaskQueue_PushFail(t *testing.T) {
+	// Some items and their priorities.
+	start := time.Now().UTC()
+	tpq := NewTaskQueue()
+
+	// Insert a new item and then modify its priority.
+	task := tests.NewTask("task-0", start.Add(time.Millisecond*1))
+	if ok := tpq.Push(task); !ok {
+		t.Error("first push must success!")
+	}
+	if ok := tpq.Push(task); ok {
+		t.Error("second push must fail!")
+	}
+}
+
+func TestTaskQueue_PopFail(t *testing.T) {
+	tpq := NewTaskQueue()
+	if tt := tpq.Pop(); tt != nil {
+		t.Error("pop from empty queue must return nil!")
+	}
+}
+
+func TestTaskQueue_PeekFail(t *testing.T) {
+	tpq := NewTaskQueue()
+	tt := tpq.Peek()
+	if tt != nil {
+		t.Errorf("peek an empty task queue must be empty, got: %v", tt)
+	}
+}
+
+func TestTaskQueue_UpdateFail(t *testing.T) {
+	tpq := NewTaskQueue()
+	task := tests.NewTask("task-0", time.Now().UTC().Add(time.Millisecond*1))
+	if ok := tpq.Update(task); ok {
+		t.Errorf("update non existing task must be fail!")
 	}
 }

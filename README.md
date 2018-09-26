@@ -1,13 +1,13 @@
-# goscheduler
+# sched
 
-[![GoDoc](https://godoc.org/github.com/changkun/goscheduler?status.svg)](https://godoc.org/github.com/changkun/goscheduler) [![Build Status](https://travis-ci.org/changkun/goscheduler.svg?branch=master)](https://travis-ci.org/changkun/goscheduler) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/goscheduler)](https://goreportcard.com/report/github.com/changkun/goscheduler) [![codecov](https://codecov.io/gh/changkun/goscheduler/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/goscheduler) ![](https://img.shields.io/github/release/changkun/goscheduler/all.svg)
+[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) ![](https://img.shields.io/github/release/changkun/sched/all.svg)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
-`goscheduler` is a consistently reliable embedded task scheduler library for _GO_, which applies to be a microkernel of an internal application service, and pluggable tasks must implements `goscheduler` Task interface.
+`sched` is a consistently reliable embedded task scheduler library for _GO_. It applies to be a microkernel of an internal application service, and pluggable tasks must implements `sched` **Task** interface.
 
-`goscheduler ` not only schedules a task at a specific time or reschedules a planned task immediately, but also flexible to support periodically tasks, which differ from traditional non-consistently unreliable cron task scheduling.
+`sched ` not only schedules a task at a specific time or reschedules a planned task immediately, but also flexible to support periodically tasks, which differ from traditional non-consistently unreliable cron task scheduling.
 
-Furthermore, `goscheduler` uses priority queue schedules all tasks and a distributed lock mechanism that ensures tasks can only be executed once across multiple replica instances.
+Furthermore, `sched` manage tasks, like goroutine runtime scheduler, uses priority queue schedules all tasks and a distributed lock mechanism that ensures tasks can only be executed once across multiple replica instances.
 
 ## Features
 
@@ -22,9 +22,34 @@ Furthermore, `goscheduler` uses priority queue schedules all tasks and a distrib
 - **Fault Tolerance**
   - Recover when restart, retry if needed or on error
 
+## Getting started
+
+```go
+// Init sched database
+sched.Init("redis://127.0.0.1:6379/1")
+
+// Create a temporal scheduler
+s := sched.New()
+
+// Recover tasks
+s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+// or 
+// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+
+// Setup tasks
+s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+// or 
+// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+
+// Launch a task
+s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+// or 
+// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+```
+
 ## Benchmarks
 
-See [benchmarks](./benchmarks/bench.md) getting to know more analysis of `goscheduler` performance.
+See [benchmarks](./benchmarks/bench.md) getting to know more analysis of `sched` performance.
 
 ## License
 

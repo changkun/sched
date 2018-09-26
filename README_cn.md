@@ -1,12 +1,14 @@
-# goscheduler
+# sched
 
-[![GoDoc](https://godoc.org/github.com/changkun/goscheduler?status.svg)](https://godoc.org/github.com/changkun/goscheduler) [![Build Status](https://travis-ci.org/changkun/goscheduler.svg?branch=master)](https://travis-ci.org/changkun/goscheduler) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/goscheduler)](https://goreportcard.com/report/github.com/changkun/goscheduler) [![codecov](https://codecov.io/gh/changkun/goscheduler/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/goscheduler) ![](https://img.shields.io/github/release/changkun/goscheduler/all.svg)
+[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) ![](https://img.shields.io/github/release/changkun/sched/all.svg)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
-`goscheduler` 是一个 _GO_ 编写的一致可靠的嵌入型任务调度库，适合作为应用服务内部核心任务调度的一个微内核，任务插件通过实现 `goscheduler` 所定义的接口来完成。
+`sched` 是一个 _GO_ 编写的一致可靠的嵌入型任务调度库，适合作为应用服务内部核心任务调度的一个微内核，任务插件通过实现 `sched` 所定义的接口来完成。
 
-摒弃了 `cron` 的周期性不可靠、无容错式调度，`goscheduler` 无需了解 `cron` 调度语法，却比 cron 更加灵活，
+摒弃了 `cron` 的周期性不可靠、无容错式调度，`sched` 无需了解 `cron` 调度语法，却比 cron 更加灵活，
 不仅能支持单次任务执行调度或重新调度现有任务，亦能支持周期式、不定周期式反复调度。
+
+此外，`sched` 采用了与 goroutine 运行时调度器类似的设计，使用优先队列管理、分布式锁机制一致的管理了所有的任务。
 
 ## 特性
 
@@ -21,9 +23,34 @@
 - **强容错机制**
   - 当应用重启、或任务有需要时能被重新调度
 
+## 起步
+
+```go
+// 初始化 sched 数据库
+sched.Init("redis://127.0.0.1:6379/1")
+
+// 创建调度器
+s := sched.New()
+
+// 恢复指定类型的任务
+s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+// 或
+// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+
+// 设置指定类型的任务
+s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+// 或
+// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+
+// 启动指定类型的任务
+s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+// 或
+// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+```
+
 ## 性能
 
-查看[性能测试](./benchmarks/bench_cn.md)来了解关于 `goscheduler` 的性能分析。
+查看[性能测试](./benchmarks/bench_cn.md)来了解关于 `sched` 的性能分析。
 
 ## 许可
 
