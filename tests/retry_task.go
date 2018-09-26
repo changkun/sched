@@ -6,6 +6,7 @@ package tests
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type RetryTask struct {
 	MaxRetry   int
 	id         string
 	execution  time.Time
+	mu         sync.Mutex
 }
 
 // NewRetryTask creates a task
@@ -36,6 +38,8 @@ func (t *RetryTask) GetID() (id string) {
 
 // GetExecution get execution time
 func (t *RetryTask) GetExecution() (execute time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	execute = t.execution
 	return
 }
@@ -57,6 +61,8 @@ func (t *RetryTask) SetID(id string) {
 
 // SetExecution sets the execution time of a task
 func (t *RetryTask) SetExecution(current time.Time) (old time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	old = t.execution
 	t.execution = current
 	return
@@ -64,7 +70,7 @@ func (t *RetryTask) SetExecution(current time.Time) (old time.Time) {
 
 // Execute is the actual execution block
 func (t *RetryTask) Execute() (retry bool, fail error) {
-	if t.RetryCount >= t.MaxRetry {
+	if t.RetryCount > t.MaxRetry {
 		O.SetLast(time.Now().UTC())
 		fmt.Printf("Execute retry task %s, retry count: %d, tollerance: %v, last retry.\n", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution()))
 		return false, nil
