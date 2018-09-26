@@ -27,23 +27,14 @@ goschduler schedules different tasks in a priority queue and schedules task with
 	// Init sched database
 	sched.Init("redis://127.0.0.1:6379/1")
 
-	// Create a temporal scheduler
-	s := sched.New()
-
 	// Recover tasks
-	s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
-	// or
-	// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+	sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
 
 	// Setup tasks
-	s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-	// or
-	// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 	// Launch a task
-	s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-	// or
-	// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 Task interface
 

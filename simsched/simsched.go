@@ -122,7 +122,7 @@ func (s *Scheduler) simpleretry(t task.Interface) {
 }
 
 func (s *Scheduler) simpleexecute(t task.Interface) {
-	if t.GetExecution().Sub(time.Now().UTC()) < time.Millisecond {
+	if t.GetExecution().Before(time.Now().UTC()) {
 		retry, err := t.Execute()
 		if retry || err != nil {
 			s.simpleretry(t)

@@ -1,6 +1,6 @@
 # sched
 
-[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) ![](https://img.shields.io/github/release/changkun/sched/all.svg)
+[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) [![](https://img.shields.io/github/release/changkun/sched/all.svg)](https://github.com/changkun/sched/releases)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
 `sched` is a consistently reliable embedded task scheduler library for _GO_. It applies to be a microkernel of an internal application service, and pluggable tasks must implements `sched` **Task** interface.
@@ -28,23 +28,14 @@ Furthermore, `sched` manage tasks, like goroutine runtime scheduler, uses priori
 // Init sched database
 sched.Init("redis://127.0.0.1:6379/1")
 
-// Create a temporal scheduler
-s := sched.New()
-
 // Recover tasks
-s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
-// or 
-// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
 
 // Setup tasks
-s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-// or 
-// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 // Launch a task
-s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-// or 
-// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 ```
 
 ## Benchmarks

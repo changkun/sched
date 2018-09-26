@@ -1,6 +1,6 @@
 # sched
 
-[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) ![](https://img.shields.io/github/release/changkun/sched/all.svg)
+[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) [![](https://img.shields.io/github/release/changkun/sched/all.svg)](https://github.com/changkun/sched/releases)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
 `sched` 是一个 _GO_ 编写的一致可靠的嵌入型任务调度库，适合作为应用服务内部核心任务调度的一个微内核，任务插件通过实现 `sched` 所定义的接口来完成。
@@ -29,23 +29,14 @@
 // 初始化 sched 数据库
 sched.Init("redis://127.0.0.1:6379/1")
 
-// 创建调度器
-s := sched.New()
-
 // 恢复指定类型的任务
-s.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
-// 或
-// sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
+sched.Recover(&ArbitraryTask1{}, &ArbitraryTask2{})
 
 // 设置指定类型的任务
-s.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-// 或
-// sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+sched.Setup(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 
 // 启动指定类型的任务
-s.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
-// 或
-// sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+sched.Launch(&ArbitraryTask1{...}, &ArbitraryTask2{...})
 ```
 
 ## 性能
