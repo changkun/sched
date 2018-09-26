@@ -24,7 +24,7 @@ func TestRedis(t *testing.T) {
 	if err != nil {
 		t.Errorf("GET must success, err: %v", err)
 	}
-	keys, err := store.KEYS("")
+	keys, err := store.KEYS("123")
 	if err != nil {
 		t.Errorf("KEYS must success, err: %v", err)
 	}
