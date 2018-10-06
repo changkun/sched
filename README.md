@@ -1,6 +1,7 @@
 # sched
 
-[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) [![](https://img.shields.io/github/release/changkun/sched/all.svg)](https://github.com/changkun/sched/releases)
+[![GoDoc](https://godoc.org/github.com/changkun/sched?status.svg)](https://godoc.org/github.com/changkun/sched) [![Build Status](https://travis-ci.org/changkun/sched.svg?branch=master)](https://travis-ci.org/changkun/sched) [![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched) [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched) [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fchangkun%2Fsched.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fchangkun%2Fsched?ref=badge_shield)
+[![](https://img.shields.io/github/release/changkun/sched/all.svg)](https://github.com/changkun/sched/releases)
 [![](https://img.shields.io/badge/language-English-blue.svg)](./README.md) [![](https://img.shields.io/badge/language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](./README_cn.md) 
 
 `sched` is a consistently reliable embedded task scheduler library for _GO_. It applies to be a microkernel of an internal application service, and pluggable tasks must implements `sched` **Task** interface.
@@ -45,3 +46,5 @@ See [benchmarks](./benchmarks/bench.md) getting to know more analysis of `sched`
 ## License
 
 [MIT](./LICENSE) &copy; [Changkun Ou](https://changkun.de)
+
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fchangkun%2Fsched.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fchangkun%2Fsched?ref=badge_large)
