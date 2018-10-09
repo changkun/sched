@@ -17,7 +17,7 @@ func strictSleep(latest time.Time) {
 func TestSched(t *testing.T) {
 	const (
 		retry = 3
-		total = 5000
+		total = 1000
 	)
 
 	start := time.Now().UTC()

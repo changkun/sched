@@ -6,8 +6,9 @@ package tests
 
 import (
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // RetryTask implements task.Interface However it has no
@@ -17,7 +18,6 @@ type RetryTask struct {
 	MaxRetry   int
 	id         string
 	execution  time.Time
-	mu         sync.Mutex
 }
 
 // NewRetryTask creates a task
@@ -38,8 +38,6 @@ func (t *RetryTask) GetID() (id string) {
 
 // GetExecution get execution time
 func (t *RetryTask) GetExecution() (execute time.Time) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	execute = t.execution
 	return
 }
@@ -60,12 +58,15 @@ func (t *RetryTask) SetID(id string) {
 }
 
 // SetExecution sets the execution time of a task
-func (t *RetryTask) SetExecution(current time.Time) (old time.Time) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	old = t.execution
-	t.execution = current
-	return
+func (t *RetryTask) SetExecution(current time.Time) time.Time {
+	var ptr = unsafe.Pointer(&t.execution)
+	var old unsafe.Pointer
+	for {
+		old = atomic.LoadPointer(&ptr)
+		if atomic.CompareAndSwapPointer(&ptr, old, unsafe.Pointer(&current)) {
+			return *((*time.Time)(old))
+		}
+	}
 }
 
 // Execute is the actual execution block

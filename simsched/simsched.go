@@ -6,7 +6,9 @@ package simsched
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/changkun/sched/internal/pq"
 	"github.com/changkun/sched/task"
@@ -19,8 +21,7 @@ var (
 
 // Scheduler is the actual scheduler for task scheduling
 type Scheduler struct {
-	mu    *sync.Mutex
-	timer *time.Timer
+	timer unsafe.Pointer
 	queue *pq.TaskQueue
 }
 
@@ -28,7 +29,6 @@ type Scheduler struct {
 func New() *Scheduler {
 	schedulerOnce.Do(func() {
 		worker = &Scheduler{
-			mu:    &sync.Mutex{},
 			timer: nil,
 			queue: pq.NewTaskQueue(),
 		}
@@ -44,7 +44,7 @@ func Submit(ts ...task.Interface) {
 // Submit task without persistance guarantee
 func (s *Scheduler) Submit(ts ...task.Interface) {
 	for i := range ts {
-		New().simpleschd(ts[i])
+		New().simschd(ts[i])
 	}
 }
 
@@ -56,30 +56,26 @@ func Boot(ts ...task.Interface) {
 // Boot given tasks immediately without persistance guarantee
 func (s *Scheduler) Boot(ts ...task.Interface) {
 	for i := range ts {
-		s.simplelaunch(ts[i])
+		s.simlaunch(ts[i])
 	}
 }
 
-func (s *Scheduler) simplelaunch(t task.Interface) {
+func (s *Scheduler) simlaunch(t task.Interface) {
 	t.SetExecution(time.Now().UTC())
 	s.Submit(t)
 }
 
 func (s *Scheduler) setTimer(duration time.Duration) {
-	s.mu.Lock()
-	s.timer = time.NewTimer(duration)
-	s.mu.Unlock()
+	atomic.StorePointer(&s.timer, unsafe.Pointer(time.NewTimer(duration)))
 }
 
 func (s *Scheduler) getTimer() *time.Timer {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.timer
+	return (*time.Timer)(atomic.LoadPointer(&s.timer))
 }
 
-func (s *Scheduler) simpleschd(t task.Interface) {
-	s.simplepause()
-	defer s.simpleresume()
+func (s *Scheduler) simschd(t task.Interface) {
+	s.simpause()
+	defer s.simresume()
 
 	// if priority is able to be update
 	if s.queue.Update(t) {
@@ -88,14 +84,15 @@ func (s *Scheduler) simpleschd(t task.Interface) {
 
 	s.queue.Push(t)
 }
-func (s *Scheduler) simplepause() {
-	s.mu.Lock()
-	if s.timer != nil {
-		s.timer.Stop()
+func (s *Scheduler) simpause() {
+	// fast path.
+	if atomic.LoadPointer(&s.timer) == nil {
+		return
 	}
-	s.mu.Unlock()
+
+	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
 }
-func (s *Scheduler) simpleresume() {
+func (s *Scheduler) simresume() {
 	t := s.queue.Peek()
 	if t == nil {
 		return
@@ -107,25 +104,25 @@ func (s *Scheduler) simpleresume() {
 		if t == nil {
 			return
 		}
-		s.simpleresume()
-		s.simplearrival(t)
+		s.simresume()
+		s.simarrival(t)
 	}()
 }
 
-func (s *Scheduler) simplearrival(t task.Interface) {
-	s.simpleexecute(t)
+func (s *Scheduler) simarrival(t task.Interface) {
+	s.simexecute(t)
 }
 
-func (s *Scheduler) simpleretry(t task.Interface) {
+func (s *Scheduler) simretry(t task.Interface) {
 	t.SetExecution(t.GetExecution().Add(t.GetRetryDuration()))
 	s.Submit(t)
 }
 
-func (s *Scheduler) simpleexecute(t task.Interface) {
+func (s *Scheduler) simexecute(t task.Interface) {
 	if t.GetExecution().Before(time.Now().UTC()) {
 		retry, err := t.Execute()
 		if retry || err != nil {
-			s.simpleretry(t)
+			s.simretry(t)
 			return
 		}
 		return

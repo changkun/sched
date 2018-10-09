@@ -12,7 +12,7 @@ Furthermore, `sched` manage tasks, like goroutine runtime scheduler, uses priori
 ## Features
 
 - **Flexible Scheduling** 
-  - Single execution, period-equally execution, period-inequally execution
+  - Lock-free scheduling, single execution, period-equally execution, period-inequally execution
 - **Microkernel Embedding**
   - Embedding into an application without change existing code
 - **Distributed Reliability**

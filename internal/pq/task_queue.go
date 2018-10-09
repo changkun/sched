@@ -7,6 +7,8 @@ package pq
 import (
 	"container/heap"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/changkun/sched/task"
 )
@@ -28,7 +30,7 @@ import (
 //
 // Worst case for "on average" is O(n)
 type TaskQueue struct {
-	heap   *itemHeap
+	heap   unsafe.Pointer //*itemHeap
 	lookup map[string]*Item
 	mu     sync.Mutex
 }
@@ -38,16 +40,14 @@ func NewTaskQueue() *TaskQueue {
 	pq := &itemHeap{}
 	heap.Init(pq) // O(1) due to empty queue
 	return &TaskQueue{
-		heap:   pq,
+		heap:   unsafe.Pointer(pq),
 		lookup: map[string]*Item{},
 	}
 }
 
 // Len of queue
 func (m *TaskQueue) Len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.heap.Len()
+	return ((*itemHeap)(atomic.LoadPointer(&m.heap))).Len()
 }
 
 // Push item
@@ -60,8 +60,8 @@ func (m *TaskQueue) Push(t task.Interface) bool {
 		return false
 	}
 	item := NewItem(t)
-	heap.Push(m.heap, item)    // O(log(n))
-	m.lookup[t.GetID()] = item // O(1)
+	heap.Push((*itemHeap)(m.heap), item) // O(log(n))
+	m.lookup[t.GetID()] = item           // O(1)
 	return true
 }
 
@@ -70,12 +70,12 @@ func (m *TaskQueue) Pop() task.Interface {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.heap.Len() == 0 {
+	if (*itemHeap)(m.heap).Len() == 0 {
 		return nil
 	}
 
-	item := heap.Pop(m.heap).(*Item)     // O(log(n))
-	delete(m.lookup, item.Value.GetID()) // O(1) on average
+	item := heap.Pop((*itemHeap)(m.heap)).(*Item) // O(log(n))
+	delete(m.lookup, item.Value.GetID())          // O(1) on average
 	return item.Value
 }
 
@@ -84,12 +84,12 @@ func (m *TaskQueue) Peek() task.Interface {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.heap.Len() == 0 {
+	if (*itemHeap)(m.heap).Len() == 0 {
 		return nil
 	}
 
-	item := heap.Pop(m.heap).(*Item) // O(log(n))
-	heap.Push(m.heap, item)          // O(log(n))
+	item := heap.Pop((*itemHeap)(m.heap)).(*Item) // O(log(n))
+	heap.Push((*itemHeap)(m.heap), item)          // O(log(n))
 	return item.Value
 }
 
@@ -105,6 +105,6 @@ func (m *TaskQueue) Update(t task.Interface) bool {
 
 	item.priority = t.GetExecution()
 	item.Value = t
-	heap.Fix(m.heap, item.index) // O(log(n))
+	heap.Fix((*itemHeap)(m.heap), item.index) // O(log(n))
 	return true
 }

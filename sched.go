@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/changkun/sched/internal/pool"
 	"github.com/changkun/sched/internal/pq"
@@ -23,8 +25,7 @@ var (
 
 // Scheduler is the actual scheduler for task scheduling
 type Scheduler struct {
-	mu    *sync.Mutex
-	timer *time.Timer
+	timer unsafe.Pointer
 	queue *pq.TaskQueue
 }
 
@@ -37,7 +38,6 @@ func Init(url string) {
 func New() *Scheduler {
 	schedulerOnce.Do(func() {
 		worker = &Scheduler{
-			mu:    &sync.Mutex{},
 			timer: nil,
 			queue: pq.NewTaskQueue(),
 		}
@@ -156,23 +156,20 @@ func (s *Scheduler) schedule(t task.Interface) {
 }
 
 func (s *Scheduler) setTimer(duration time.Duration) {
-	s.mu.Lock()
-	s.timer = time.NewTimer(duration)
-	s.mu.Unlock()
+	atomic.StorePointer(&s.timer, unsafe.Pointer(time.NewTimer(duration)))
 }
 
 func (s *Scheduler) getTimer() *time.Timer {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.timer
+	return (*time.Timer)(atomic.LoadPointer(&s.timer))
 }
 
 func (s *Scheduler) pause() {
-	s.mu.Lock()
-	if s.timer != nil {
-		s.timer.Stop()
+	// fast path.
+	if atomic.LoadPointer(&s.timer) == nil {
+		return
 	}
-	s.mu.Unlock()
+
+	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
 }
 
 func (s *Scheduler) resume() {
@@ -236,23 +233,23 @@ func (s *Scheduler) execute(t task.Interface) {
 		return
 	}
 	// for timer tollerance
-	if execution.Sub(time.Now().UTC()) < time.Millisecond {
-		retry, err := t.Execute()
-		if retry || err != nil {
-			s.retry(t)
-			return
-		}
-		if err := store.Delete(t); err != nil {
-			// NOTE: Generally this is not able to be fail.
-			// However it may caused by the lost of connection.
-			// Though task will be recovered then app restarts,
-			// but it may leads an inconsistency, we need other
-			// means to solve this problem
-			return
-		}
+	if execution.After(time.Now().UTC()) {
+		// reschedule task, we must save the task again by using s.Setup
+		t.SetExecution(*execution)
+		s.Setup(t)
 		return
 	}
-	// reschedule task, we must save the task again by using s.Setup
-	t.SetExecution(*execution)
-	s.Setup(t)
+	retry, err := t.Execute()
+	if retry || err != nil {
+		s.retry(t)
+		return
+	}
+	if err := store.Delete(t); err != nil {
+		// NOTE: Generally this is not able to be fail.
+		// However it may caused by the lost of connection.
+		// Though task will be recovered then app restarts,
+		// but it may leads an inconsistency, we need other
+		// means to solve this problem
+		return
+	}
 }

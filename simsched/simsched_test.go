@@ -19,7 +19,7 @@ func strictSleep(latest time.Time) {
 	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
 }
 
-func TestMasiveSchedule(t *testing.T) {
+func TestSimSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 	expectedOrder := []string{}
@@ -35,13 +35,13 @@ func TestMasiveSchedule(t *testing.T) {
 	}
 }
 
-func TestNew(t *testing.T) {
+func TestSimSchedNew(t *testing.T) {
 	if s := simsched.New(); s == nil {
 		t.Error("new scheduler fail!")
 	}
 }
 
-func TestSetup(t *testing.T) {
+func TestSimSchedSetup(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -65,7 +65,7 @@ func TestSetup(t *testing.T) {
 	}
 }
 
-func TestSchedule1(t *testing.T) {
+func TestSimSchedSchedule1(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -82,7 +82,7 @@ func TestSchedule1(t *testing.T) {
 		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
 	}
 }
-func TestSchedule2(t *testing.T) {
+func TestSimSchedSchedule2(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 

@@ -5,7 +5,9 @@
 package tests
 
 import (
+	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // SimRetryTask implements task.Interface However it has no
@@ -54,10 +56,15 @@ func (t *SimRetryTask) SetID(id string) {
 }
 
 // SetExecution sets the execution time of a task
-func (t *SimRetryTask) SetExecution(current time.Time) (old time.Time) {
-	old = t.execution
-	t.execution = current
-	return
+func (t *SimRetryTask) SetExecution(current time.Time) time.Time {
+	var ptr = unsafe.Pointer(&t.execution)
+	var old unsafe.Pointer
+	for {
+		old = atomic.LoadPointer(&ptr)
+		if atomic.CompareAndSwapPointer(&ptr, old, unsafe.Pointer(&current)) {
+			return *((*time.Time)(old))
+		}
+	}
 }
 
 // Execute is the actual execution block

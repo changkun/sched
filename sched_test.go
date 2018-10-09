@@ -43,7 +43,7 @@ func isTaskScheduled() error {
 	return nil
 }
 
-func TestMasiveSchedule(t *testing.T) {
+func TestSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
 
 	start := time.Now().UTC()
@@ -67,13 +67,13 @@ func TestMasiveSchedule(t *testing.T) {
 	}
 }
 
-func TestNew(t *testing.T) {
+func TestSchedNew(t *testing.T) {
 	if s := sched.New(); s == nil {
 		t.Error("new scheduler fail!")
 	}
 }
 
-func TestRecover(t *testing.T) {
+func TestSchedRecover(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -100,7 +100,7 @@ func TestRecover(t *testing.T) {
 	}
 }
 
-func TestSetup(t *testing.T) {
+func TestSchedSetup(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -126,7 +126,7 @@ func TestSetup(t *testing.T) {
 	}
 }
 
-func TestRecoverFail(t *testing.T) {
+func TestSchedRecoverFail(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 	task := tests.NewNonExportTask("task-0", start.Add(time.Millisecond*10))
@@ -144,7 +144,7 @@ func TestRecoverFail(t *testing.T) {
 	}
 }
 
-func TestSchedule1(t *testing.T) {
+func TestSchedSchedule1(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -161,7 +161,7 @@ func TestSchedule1(t *testing.T) {
 		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
 	}
 }
-func TestSchedule2(t *testing.T) {
+func TestSchedSchedule2(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
@@ -198,7 +198,7 @@ func set(key string, postpone time.Duration, t task.Interface) {
 	conn.Do("SET", "sched:task:"+temp.GetID(), string(data))
 }
 
-func TestSchedule3(t *testing.T) {
+func TestSchedSchedule3(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 
