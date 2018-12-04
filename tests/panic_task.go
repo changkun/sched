@@ -5,20 +5,19 @@
 package tests
 
 import (
-	"fmt"
 	"time"
 )
 
-// Task implements task.Interface
-type Task struct {
+// PanicTask implements task.Interface
+type PanicTask struct {
 	Public    string
 	id        string
 	execution time.Time
 }
 
-// NewTask creates a task
-func NewTask(id string, e time.Time) *Task {
-	return &Task{
+// NewPanicTask creates a task
+func NewPanicTask(id string, e time.Time) *PanicTask {
+	return &PanicTask{
 		Public:    "not nil",
 		id:        id,
 		execution: e,
@@ -26,47 +25,46 @@ func NewTask(id string, e time.Time) *Task {
 }
 
 // GetID get task id
-func (t *Task) GetID() (id string) {
+func (t *PanicTask) GetID() (id string) {
 	id = t.id
 	return
 }
 
 // GetExecution get execution time
-func (t *Task) GetExecution() (execute time.Time) {
+func (t *PanicTask) GetExecution() (execute time.Time) {
 	execute = t.execution
 	return
 }
 
 // GetTimeout get timeout of execution
-func (t *Task) GetTimeout() (executeTimeout time.Duration) {
+func (t *PanicTask) GetTimeout() (executeTimeout time.Duration) {
 	return time.Second
 }
 
 // GetRetryTime get retry execution duration
-func (t *Task) GetRetryTime() time.Time {
+func (t *PanicTask) GetRetryTime() time.Time {
 	return time.Now().UTC().Add(time.Second)
 }
 
 // SetID sets the id of a task
-func (t *Task) SetID(id string) {
+func (t *PanicTask) SetID(id string) {
 	t.id = id
 }
 
 // IsValidID check id is valid
-func (t *Task) IsValidID() bool {
+func (t *PanicTask) IsValidID() bool {
 	return true
 }
 
 // SetExecution sets the execution time of a task
-func (t *Task) SetExecution(current time.Time) (old time.Time) {
+func (t *PanicTask) SetExecution(current time.Time) (old time.Time) {
 	old = t.execution
 	t.execution = current
 	return
 }
 
 // Execute is the actual execution block
-func (t *Task) Execute() (retry bool, fail error) {
+func (t *PanicTask) Execute() (retry bool, fail error) {
 	O.Push(t.id)
-	fmt.Printf("Execute task %s.\n", t.id)
-	return false, nil
+	panic(t.id)
 }

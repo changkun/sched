@@ -2,7 +2,7 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package sched_test
+package sched
 
 import (
 	"encoding/json"
@@ -11,16 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/changkun/sched"
-	"github.com/changkun/sched/internal/pool"
-	"github.com/changkun/sched/internal/store"
-	"github.com/changkun/sched/task"
 	"github.com/changkun/sched/tests"
-	"github.com/gomodule/redigo/redis"
 )
 
 func init() {
-	sched.Init("redis://127.0.0.1:6379/1")
+	Init("redis://127.0.0.1:6379/2")
 }
 
 // sleep to wait execution, a strict wait tolerance: 100 milliseconds
@@ -30,10 +25,7 @@ func strictSleep(latest time.Time) {
 
 // isTaskScheduled checks if all tasks are scheduled
 func isTaskScheduled() error {
-	conn := pool.Get()
-	defer conn.Close()
-
-	keys, err := store.GetRecords()
+	keys, err := getRecords()
 	if err != nil {
 		return err
 	}
@@ -45,16 +37,13 @@ func isTaskScheduled() error {
 
 func TestSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
-
 	start := time.Now().UTC()
-	s := sched.New()
-
 	expectedOrder := []string{}
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
 		expectedOrder = append(expectedOrder, key)
-		s.Setup(task)
+		Submit(task)
 	}
 	strictSleep(start.Add(time.Millisecond * 10 * 25))
 
@@ -65,12 +54,7 @@ func TestSchedMasiveSchedule(t *testing.T) {
 	if !reflect.DeepEqual(expectedOrder, tests.O.Get()) {
 		t.Errorf("execution order wrong, got: %v", tests.O.Get())
 	}
-}
 
-func TestSchedNew(t *testing.T) {
-	if s := sched.New(); s == nil {
-		t.Error("new scheduler fail!")
-	}
 }
 
 func TestSchedRecover(t *testing.T) {
@@ -83,14 +67,14 @@ func TestSchedRecover(t *testing.T) {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
 		want = append(want, key)
-		if err := store.Save(task); err != nil {
+		if err := save(task); err != nil {
 			t.Errorf("store with task-unique-id error: %v\n", err)
 			return
 		}
 	}
 
 	// recover back
-	if err := sched.Recover(&tests.Task{}); err != nil {
+	if err := sched0.recover(&tests.Task{}); err != nil {
 		t.Errorf("recover task with task-unique-id error: %v\n", err)
 		return
 	}
@@ -108,7 +92,7 @@ func TestSchedSetup(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewRetryTask(key, start.Add(time.Millisecond*10*time.Duration(i)), 2)
-		if err := sched.Setup(task); err != nil {
+		if err := Submit(task); err != nil {
 			t.Fatal("setup task fail:", task)
 		}
 	}
@@ -130,11 +114,11 @@ func TestSchedRecoverFail(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 	task := tests.NewNonExportTask("task-0", start.Add(time.Millisecond*10))
-	if err := store.Save(task); err != nil {
+	if err := save(task); err != nil {
 		t.Errorf("store with task-unique-id error: %v\n", err)
 		return
 	}
-	if err := sched.Recover(&tests.Task{}); err != nil {
+	if err := sched0.recover(&tests.Task{}); err != nil {
 		t.Errorf("recover task with task-unique-id error: %v\n", err)
 		return
 	}
@@ -142,6 +126,8 @@ func TestSchedRecoverFail(t *testing.T) {
 	if !reflect.DeepEqual(tests.O.Get(), []string{}) {
 		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
 	}
+
+	cache0.DEL(prefixTask + "task-0")
 }
 
 func TestSchedSchedule1(t *testing.T) {
@@ -149,11 +135,11 @@ func TestSchedSchedule1(t *testing.T) {
 	start := time.Now().UTC()
 
 	task1 := tests.NewTask("task-1", start.Add(time.Millisecond*100))
-	sched.Setup(task1)
+	Submit(task1)
 	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
 	taskAreplica := tests.NewTask("task-1", start.Add(time.Millisecond*10))
-	go sched.Setup(task2)
-	go sched.Launch(taskAreplica)
+	go Submit(task2)
+	go Trigger(taskAreplica)
 
 	strictSleep(start.Add(time.Second))
 	want := []string{"task-1", "task-2"}
@@ -166,10 +152,10 @@ func TestSchedSchedule2(t *testing.T) {
 	start := time.Now().UTC()
 
 	task1 := tests.NewTask("task-1", start.Add(time.Millisecond*100))
-	sched.Setup(task1)
+	Submit(task1)
 	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
-	go sched.Setup(task2)
-	go sched.Launch(task1)
+	go Submit(task2)
+	go Trigger(task1)
 
 	strictSleep(start.Add(time.Second))
 	want := []string{"task-1", "task-2"}
@@ -178,24 +164,21 @@ func TestSchedSchedule2(t *testing.T) {
 	}
 }
 
-func set(key string, postpone time.Duration, t task.Interface) {
-	conn := pool.Get()
-	defer conn.Close()
-
-	result, _ := redis.String(conn.Do("GET", "sched:task:"+key))
-	r := &store.Record{}
+func set(key string, postpone time.Duration, t Task) {
+	result, _ := cache0.GET(prefixTask + key)
+	r := &record{}
 	json.Unmarshal([]byte(result), r)
 	d, _ := json.Marshal(r.Data)
-	temp := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(task.Interface)
+	temp := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
 	json.Unmarshal(d, &temp)
 	temp.SetID(key)
 	temp.SetExecution(r.Execution.Add(postpone))
-	data, _ := json.Marshal(&store.Record{
+	data, _ := json.Marshal(&record{
 		ID:        temp.GetID(),
 		Execution: temp.GetExecution(),
 		Data:      temp,
 	})
-	conn.Do("SET", "sched:task:"+temp.GetID(), string(data))
+	cache0.SET(prefixTask+temp.GetID(), string(data))
 }
 
 func TestSchedSchedule3(t *testing.T) {
@@ -204,7 +187,7 @@ func TestSchedSchedule3(t *testing.T) {
 
 	// task1 with 1 sec later
 	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	sched.Setup(task1)
+	Submit(task1)
 
 	// somehow override database time to 2 sec, the actual execution should be later
 	set("task-1", time.Second*2, &tests.Task{})
@@ -226,4 +209,63 @@ func TestSchedSchedule3(t *testing.T) {
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("setup task execution order is not as expected, got: %v", tests.O.Get())
 	}
+}
+
+func TestSchedPause(t *testing.T) {
+	tests.O.Clear()
+
+	start := time.Now().UTC()
+	// task1 with 1 sec later
+	task1 := tests.NewTask("task-1", start.Add(time.Second))
+	Submit(task1)
+
+	// pause sched and sleep 1 sec, task1 should not be executed
+	Pause()
+	time.Sleep(time.Second * 2)
+	want := []string{}
+	if !reflect.DeepEqual(tests.O.Get(), want) {
+		t.Errorf("setup task execution order is not as expected, got: %v", tests.O.Get())
+	}
+
+	// at this moment, task-1 should be executed asap
+	// should have executed
+	Resume()
+	// sleep until start+3sec
+	strictSleep(start.Add(time.Second * 3))
+	want = []string{"task-1"}
+	if !reflect.DeepEqual(tests.O.Get(), want) {
+		t.Errorf("setup task execution order is not as expected, got: %v", tests.O.Get())
+	}
+}
+
+func TestSchedStop(t *testing.T) {
+	tests.O.Clear()
+
+	start := time.Now().UTC()
+	// task1 with 1 sec later
+	task1 := tests.NewTask("task-1", start.Add(time.Second))
+	Submit(task1)
+	time.Sleep(time.Second + 100*time.Millisecond)
+	Stop()
+	want := []string{"task-1"}
+	if !reflect.DeepEqual(tests.O.Get(), want) {
+		t.Errorf("setup task execution order is not as expected, got: %v", tests.O.Get())
+	}
+	Resume()
+}
+
+func TestSchedPanic(t *testing.T) {
+	tests.O.Clear()
+
+	start := time.Now().UTC()
+	// task1 with 1 sec later
+	task1 := tests.NewPanicTask("task-1", start.Add(time.Second))
+	Submit(task1)
+	time.Sleep(time.Second + 100*time.Millisecond)
+	Stop()
+	want := []string{"task-1"}
+	if !reflect.DeepEqual(tests.O.Get(), want) {
+		t.Errorf("setup task execution order is not as expected, got: %v", tests.O.Get())
+	}
+	Resume()
 }

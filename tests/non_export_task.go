@@ -42,14 +42,19 @@ func (t *NonExportTask) GetTimeout() (executeTimeout time.Duration) {
 	return time.Second
 }
 
-// GetRetryDuration get retry execution duration
-func (t *NonExportTask) GetRetryDuration() (duration time.Duration) {
-	return time.Second
+// GetRetryTime get retry execution duration
+func (t *NonExportTask) GetRetryTime() time.Time {
+	return time.Now().UTC().Add(time.Second)
 }
 
 // SetID sets the id of a task
 func (t *NonExportTask) SetID(id string) {
 	t.id = id
+}
+
+// IsValidID check id is valid
+func (t *NonExportTask) IsValidID() bool {
+	return true
 }
 
 // SetExecution sets the execution time of a task
