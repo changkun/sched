@@ -136,7 +136,7 @@ func (s *sched) recover(ts ...Task) error {
 
 			data, _ := json.Marshal(r.Data)
 
-			// Note: The following comparasion provides a generic mechanism in golang, which
+			// Note: The following comparison provides a generic mechanism in golang, which
 			// unmarshals an unknown type of data into acorss multiple into an arbitrary variable.
 			//
 			// temp1 holds for a unset value of t, and temp2 tries to be set by json.Unmarshal.
