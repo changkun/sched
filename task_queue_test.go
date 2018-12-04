@@ -2,7 +2,7 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package pq
+package sched
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 func TestTaskQueue(t *testing.T) {
 	// Some items and their priorities.
 	start := time.Now().UTC()
-	tpq := NewTaskQueue()
+	tpq := newTaskQueue()
 
 	// Insert a new item and then modify its priority.
 	task := tests.NewTask("task-0", start.Add(time.Millisecond*1))
@@ -58,7 +58,7 @@ func TestTaskQueue(t *testing.T) {
 func TestTaskQueue_PushFail(t *testing.T) {
 	// Some items and their priorities.
 	start := time.Now().UTC()
-	tpq := NewTaskQueue()
+	tpq := newTaskQueue()
 
 	// Insert a new item and then modify its priority.
 	task := tests.NewTask("task-0", start.Add(time.Millisecond*1))
@@ -71,14 +71,14 @@ func TestTaskQueue_PushFail(t *testing.T) {
 }
 
 func TestTaskQueue_PopFail(t *testing.T) {
-	tpq := NewTaskQueue()
+	tpq := newTaskQueue()
 	if tt := tpq.Pop(); tt != nil {
 		t.Error("pop from empty queue must return nil!")
 	}
 }
 
 func TestTaskQueue_PeekFail(t *testing.T) {
-	tpq := NewTaskQueue()
+	tpq := newTaskQueue()
 	tt := tpq.Peek()
 	if tt != nil {
 		t.Errorf("peek an empty task queue must be empty, got: %v", tt)
@@ -86,7 +86,7 @@ func TestTaskQueue_PeekFail(t *testing.T) {
 }
 
 func TestTaskQueue_UpdateFail(t *testing.T) {
-	tpq := NewTaskQueue()
+	tpq := newTaskQueue()
 	task := tests.NewTask("task-0", time.Now().UTC().Add(time.Millisecond*1))
 	if ok := tpq.Update(task); ok {
 		t.Errorf("update non existing task must be fail!")

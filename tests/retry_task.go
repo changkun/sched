@@ -47,9 +47,9 @@ func (t *RetryTask) GetTimeout() (executeTimeout time.Duration) {
 	return time.Second
 }
 
-// GetRetryDuration get retry execution duration
-func (t *RetryTask) GetRetryDuration() (duration time.Duration) {
-	return time.Millisecond * 42
+// GetRetryTime get retry execution duration
+func (t *RetryTask) GetRetryTime() time.Time {
+	return time.Now().UTC().Add(time.Millisecond * 42)
 }
 
 // SetID sets the id of a task
@@ -57,10 +57,16 @@ func (t *RetryTask) SetID(id string) {
 	t.id = id
 }
 
+// IsValidID check id is valid
+func (t *RetryTask) IsValidID() bool {
+	return true
+}
+
 // SetExecution sets the execution time of a task
 func (t *RetryTask) SetExecution(current time.Time) time.Time {
 	var ptr = unsafe.Pointer(&t.execution)
 	var old unsafe.Pointer
+	// spin lock
 	for {
 		old = atomic.LoadPointer(&ptr)
 		if atomic.CompareAndSwapPointer(&ptr, old, unsafe.Pointer(&current)) {

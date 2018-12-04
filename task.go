@@ -2,17 +2,20 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-package task
+package sched
 
-import "time"
+import (
+	"time"
+)
 
-// Interface for a schedulable
-type Interface interface {
+// Task interface for sched
+type Task interface {
 	GetID() (id string)
-	GetExecution() (execute time.Time)
-	GetTimeout() (executeTimeout time.Duration)
-	GetRetryDuration() (duration time.Duration)
 	SetID(id string)
+	IsValidID() bool
+	GetExecution() (execute time.Time)
 	SetExecution(new time.Time) (old time.Time)
+	GetTimeout() (lockTimeout time.Duration)
+	GetRetryTime() (execute time.Time)
 	Execute() (retry bool, fail error)
 }
