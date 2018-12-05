@@ -122,8 +122,5 @@ func TestRedis(t *testing.T) {
 		}
 	})
 
-	// err := cache0.pool.Close()
-	// if err != nil {
-	// 	t.Fatalf("close cache pool error: %v", err)
-	// }
+	cache0.Close()
 }

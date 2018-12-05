@@ -99,3 +99,7 @@ func (c *cache) PERSIST(key string) (ok bool, err error) {
 	ok, err = redis.Bool(conn.Do("PERSIST", key))
 	return
 }
+
+func (c *cache) Close() {
+	c.pool.Close()
+}

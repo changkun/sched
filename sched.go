@@ -16,16 +16,13 @@ import (
 )
 
 // Init initialize task scheduler
-func Init(db string, all ...Task) {
+func Init(db string, all ...Task) error {
 	connectCache(db)
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),
 	}
-	if err := sched0.recover(all...); err != nil {
-		log.Fatalf("sched: recover tasks failed, error: %v", err)
-	}
-	log.Printf("sched: runtime scheduler has initialized and up for scheduling.")
+	return sched0.recover(all...)
 }
 
 // Stop stops runtime scheduler gracefully.
@@ -40,21 +37,21 @@ func Stop() {
 	// memory model since the loop does not wait any value but only checkes
 	// sched0.running atomically.
 	running := atomic.LoadUint64(&sched0.running)
-	log.Printf("sched: waiting for sched to stop, running tasks: %d", running)
 	for {
 		current := atomic.LoadUint64(&sched0.running)
 		if current < running {
 			running = current
-			log.Printf("sched: running tasks are reduced to %d", running)
 		}
 		// if running descreased to 0 then sched is actually can be terminated
 		if running == 0 {
-			return
+			break
 		}
 		// use runtime.Gosched vacates CPU for other goroutines
 		// instead of spin loop
 		runtime.Gosched()
 	}
+
+	cache0.Close()
 }
 
 // Submit given tasks
@@ -126,39 +123,41 @@ func (s *sched) recover(ts ...Task) error {
 	if err != nil {
 		return err
 	}
-
 	for _, t := range ts {
 		for i := range ids {
-			r := &record{ID: ids[i]}
-			if err := r.read(); err != nil {
-				return err
-			}
-
-			data, _ := json.Marshal(r.Data)
-
-			// Note: The following comparison provides a generic mechanism in golang, which
-			// unmarshals an unknown type of data into acorss multiple into an arbitrary variable.
-			//
-			// temp1 holds for a unset value of t, and temp2 tries to be set by json.Unmarshal.
-			//
-			// In the end, if temp1 and temp2 are appropriate type of tasks, then temp2 should
-			// not DeepEqual to temp1, because temp2 is setted by store data.
-			// Otherwise, the determined task is inappropriate type to be scheduled, jump to
-			// next record and see if it can be scheduled.
-			temp1 := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-			temp2 := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-			if err := json.Unmarshal(data, &temp2); err != nil {
-				continue
-			}
-			if reflect.DeepEqual(temp1, temp2) || temp2 == nil || !temp2.IsValidID() {
-				continue
-			}
-			temp2.SetID(ids[i])
-			temp2.SetExecution(r.Execution)
-			s.tasks.Push(temp2)
+			s.load(ids[i], t)
 		}
 	}
 	s.resume()
+	return nil
+}
+
+func (s *sched) load(id string, t Task) error {
+	r := &record{ID: id}
+	if err := r.read(); err != nil {
+		return err
+	}
+
+	data, _ := json.Marshal(r.Data)
+
+	// Note: The following comparison provides a generic mechanism in golang, which
+	// unmarshals an unknown type of data into acorss multiple into an arbitrary variable.
+	//
+	// temp1 holds for a unset value of t, and temp2 tries to be set by json.Unmarshal.
+	//
+	// In the end, if temp1 and temp2 are appropriate type of tasks, then temp2 should
+	// not DeepEqual to temp1, because temp2 is setted by store data.
+	// Otherwise, the determined task is inappropriate type to be scheduled, jump to
+	// next record and see if it can be scheduled.
+	temp1 := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
+	temp2 := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
+	json.Unmarshal(data, &temp2)
+	if reflect.DeepEqual(temp1, temp2) || temp2 == nil || !temp2.IsValidID() {
+		return nil
+	}
+	temp2.SetID(id)
+	temp2.SetExecution(r.Execution)
+	s.tasks.Push(temp2)
 	return nil
 }
 
@@ -191,7 +190,6 @@ func (s *sched) schedule(t Task) {
 
 	// if priority is able to be update
 	if s.tasks.Update(t) {
-		log.Printf("sched: existing task %s has been updated.", t.GetID())
 		return
 	}
 
@@ -246,29 +244,33 @@ func (s *sched) resume() {
 		return
 	}
 	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
-	go func() {
-		timer := s.getTimer()
-		if timer == nil {
-			return
-		}
-		<-timer.C
+	go s.timing()
+}
 
-		// fast path.
-		// if sched requires pausing, then stop executing and resume it.
-		if s.ispausing() {
-			return
-		}
+func (s *sched) timing() {
+	timer := s.getTimer()
+	if timer == nil {
+		return
+	}
+	<-timer.C
+	s.worker()
+}
+func (s *sched) worker() {
+	// fast path.
+	// if sched requires pausing, then stop executing and resume it.
+	if s.ispausing() {
+		return
+	}
 
-		// medium path.
-		// stop execution if task queue is empty
-		t := s.tasks.Pop()
-		if t == nil {
-			return
-		}
+	// medium path.
+	// stop execution if task queue is empty
+	t := s.tasks.Pop()
+	if t == nil {
+		return
+	}
 
-		s.resume()
-		s.arrival(t)
-	}()
+	s.resume()
+	s.arrival(t)
 }
 
 func (s *sched) arrival(t Task) {
