@@ -17,5 +17,10 @@ type Task interface {
 	SetExecution(new time.Time) (old time.Time)
 	GetTimeout() (lockTimeout time.Duration)
 	GetRetryTime() (execute time.Time)
-	Execute() (retry bool, fail error)
+	Execute() (result interface{}, retry bool, fail error)
+}
+
+// TaskFuture is the future of Task execution
+type TaskFuture interface {
+	Get() interface{}
 }

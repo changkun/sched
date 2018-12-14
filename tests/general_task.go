@@ -65,8 +65,7 @@ func (t *Task) SetExecution(current time.Time) (old time.Time) {
 }
 
 // Execute is the actual execution block
-func (t *Task) Execute() (retry bool, fail error) {
+func (t *Task) Execute() (result interface{}, retry bool, fail error) {
 	O.Push(t.id)
-	fmt.Printf("Execute task %s.\n", t.id)
-	return false, nil
+	return fmt.Sprintf("execute task %s.", t.id), false, nil
 }

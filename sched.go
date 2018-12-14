@@ -6,7 +6,7 @@ package sched
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
@@ -16,7 +16,7 @@ import (
 )
 
 // Init initialize task scheduler
-func Init(db string, all ...Task) error {
+func Init(db string, all ...Task) ([]TaskFuture, error) {
 	connectCache(db)
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
@@ -55,13 +55,13 @@ func Stop() {
 }
 
 // Submit given tasks
-func Submit(ts ...Task) error {
-	return sched0.submit(ts...)
+func Submit(t Task) (TaskFuture, error) {
+	return sched0.submit(t)
 }
 
 // Trigger given tasks immediately
-func Trigger(ts ...Task) error {
-	return sched0.trigger(ts...)
+func Trigger(t Task) (TaskFuture, error) {
+	return sched0.trigger(t)
 }
 
 // Pause stops the sched from running,
@@ -118,24 +118,27 @@ type sched struct {
 	tasks *taskQueue
 }
 
-func (s *sched) recover(ts ...Task) error {
+func (s *sched) recover(ts ...Task) (futures []TaskFuture, err error) {
 	ids, err := getRecords()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, t := range ts {
 		for i := range ids {
-			s.load(ids[i], t)
+			future, err := s.load(ids[i], t)
+			if future != nil && err == nil {
+				futures = append(futures, future)
+			}
 		}
 	}
 	s.resume()
-	return nil
+	return
 }
 
-func (s *sched) load(id string, t Task) error {
+func (s *sched) load(id string, t Task) (TaskFuture, error) {
 	r := &record{ID: id}
 	if err := r.read(); err != nil {
-		return err
+		return nil, err
 	}
 
 	data, _ := json.Marshal(r.Data)
@@ -153,47 +156,41 @@ func (s *sched) load(id string, t Task) error {
 	temp2 := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
 	json.Unmarshal(data, &temp2)
 	if reflect.DeepEqual(temp1, temp2) || temp2 == nil || !temp2.IsValidID() {
-		return nil
+		return nil, nil
 	}
 	temp2.SetID(id)
 	temp2.SetExecution(r.Execution)
-	s.tasks.Push(temp2)
-	return nil
+	future, _ := s.tasks.push(temp2)
+	return future, nil
 }
 
 // submit given tasks
-func (s *sched) submit(ts ...Task) error {
-	for i := range ts {
-		// save asap
-		if err := save(ts[i]); err != nil {
-			return err
-		}
-		s.schedule(ts[i])
+func (s *sched) submit(t Task) (future TaskFuture, err error) {
+	// save asap
+	if err = save(t); err != nil {
+		return
 	}
-	return nil
+	future = s.schedule(t)
+	return
 }
 
 // trigger given tasks immediately
-func (s *sched) trigger(ts ...Task) error {
-	for i := range ts {
-		ts[i].SetExecution(time.Now().UTC())
-		if err := s.submit(ts[i]); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *sched) trigger(t Task) (TaskFuture, error) {
+	t.SetExecution(time.Now().UTC())
+	return s.submit(t)
 }
 
-func (s *sched) schedule(t Task) {
+func (s *sched) schedule(t Task) TaskFuture {
 	s.pause()
 	defer s.resume()
 
 	// if priority is able to be update
-	if s.tasks.Update(t) {
-		return
+	if future, ok := s.tasks.update(t); ok {
+		return future
 	}
 
-	s.tasks.Push(t)
+	future, _ := s.tasks.push(t)
+	return future
 }
 
 func (s *sched) setTimer(duration time.Duration) {
@@ -239,7 +236,7 @@ func (s *sched) ispausing() bool {
 }
 
 func (s *sched) resume() {
-	t := s.tasks.Peek()
+	t := s.tasks.peek()
 	if t == nil {
 		return
 	}
@@ -264,17 +261,17 @@ func (s *sched) worker() {
 
 	// medium path.
 	// stop execution if task queue is empty
-	t := s.tasks.Pop()
-	if t == nil {
+	task := s.tasks.pop()
+	if task == nil {
 		return
 	}
 
 	s.resume()
-	s.arrival(t)
+	s.arrival(task)
 }
 
-func (s *sched) arrival(t Task) {
-	ok, err := lock(t)
+func (s *sched) arrival(t *task) {
+	ok, err := lock(t.Value)
 	if err != nil || !ok {
 		return
 	}
@@ -282,7 +279,7 @@ func (s *sched) arrival(t Task) {
 	s.execute(t)
 	// no need to hadle unlock fail
 	// since there is a timeout on cache
-	unlock(t)
+	unlock(t.Value)
 }
 
 func (s *sched) verify(t Task) (*time.Time, error) {
@@ -297,50 +294,51 @@ func (s *sched) verify(t Task) (*time.Time, error) {
 	return &taskTime, nil
 }
 
-func (s *sched) retry(t Task) {
-	t.SetExecution(t.GetRetryTime())
-	if err := s.submit(t); err != nil {
-		// If submit() is fail because of cache failure,
-		// directly schedule the task without any hesitate
-		// In case it may leads a problem of unabiding task
-		// scheduling
-		s.schedule(t)
-	}
+func (s *sched) reschedule(t *task, when time.Time) {
+	t.Value.SetExecution(when)
+	// If save() is fail because of cache failure,
+	// directly schedule the task without any hesitate
+	// In case it may leads a problem of unabiding task
+	// scheduling
+	save(t.Value)
+
+	s.pause()
+	s.tasks.pushBack(t)
+	s.resume()
 }
 
-func (s *sched) execute(t Task) {
+func (s *sched) execute(t *task) {
 	// record running tasks
 	atomic.AddUint64(&s.running, 1)
 	defer atomic.AddUint64(&s.running, ^uint64(0)) // -1
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("sched: task %s panic while executing, reason: %v", t.GetID(), r)
+			t.future.write(fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
 		}
 	}()
 
-	execution, err := s.verify(t)
+	execution, err := s.verify(t.Value)
 	if err != nil {
 		return
 	}
 	// for timer tollerance
 	if execution.After(time.Now().UTC()) {
 		// reschedule task, we must save the task again by using s.Setup
-		t.SetExecution(*execution)
-		s.submit(t)
+		s.reschedule(t, *execution)
 		return
 	}
-	retry, err := t.Execute()
+	result, retry, err := t.Value.Execute()
 	if retry || err != nil {
-		s.retry(t)
+		s.reschedule(t, t.Value.GetRetryTime())
 		return
 	}
-
+	t.future.write(result)
 	// NOTE: Generally this is not able to be fail.
 	// However it may caused by the lost of connection.
 	// Though task will be recovered when app restarts,
 	// but it may leads an inconsistency, we need other
 	// means to solve this problem
-	del(t)
+	del(t.Value)
 }
 
 // sched prefix for records

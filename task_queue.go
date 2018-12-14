@@ -30,45 +30,52 @@ import (
 // Lock-free priority queue is possible. However, is it possible
 // to implement in pq with lookup? we cloud not find literature indication yet.
 type taskQueue struct {
-	heap   *itemHeap
-	lookup map[string]*item
+	heap   *taskHeap
+	lookup map[string]*task
 	mu     sync.Mutex
 }
 
-// NewTaskQueue .
 func newTaskQueue() *taskQueue {
-	pq := &itemHeap{}
+	pq := &taskHeap{}
 	heap.Init(pq)
 	return &taskQueue{
 		heap:   pq, // O(1) due to empty queue
-		lookup: map[string]*item{},
+		lookup: map[string]*task{},
 	}
 }
 
-// Len of queue
-func (m *taskQueue) Len() int {
+// length of queue
+func (m *taskQueue) length() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.heap.Len()
 }
 
-// Push item
-func (m *taskQueue) Push(t Task) bool {
+// push item
+func (m *taskQueue) push(t Task) (*future, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, ok := m.lookup[t.GetID()] // O(1) amortized
+	old, ok := m.lookup[t.GetID()] // O(1) amortized
 	if ok {
-		return false
+		return old.future, false
 	}
 	item := newTaskItem(t)
 	heap.Push(m.heap, item)    // O(log(n))
 	m.lookup[t.GetID()] = item // O(1)
-	return true
+	return item.future, true
+}
+
+func (m *taskQueue) pushBack(t *task) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	heap.Push(m.heap, t)          // O(log(n))
+	m.lookup[t.Value.GetID()] = t // O(1)
 }
 
 // Pop item
-func (m *taskQueue) Pop() Task {
+func (m *taskQueue) pop() *task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -76,13 +83,13 @@ func (m *taskQueue) Pop() Task {
 		return nil
 	}
 
-	item := heap.Pop(m.heap).(*item)     // O(log(n))
+	item := heap.Pop(m.heap).(*task)     // O(log(n))
 	delete(m.lookup, item.Value.GetID()) // O(1) amortized
-	return item.Value
+	return item
 }
 
-// Peek the top priority item without deletion
-func (m *taskQueue) Peek() Task {
+// peek the top priority item without deletion
+func (m *taskQueue) peek() Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -90,61 +97,77 @@ func (m *taskQueue) Peek() Task {
 		return nil
 	}
 
-	item := heap.Pop(m.heap).(*item) // O(log(n))
+	item := heap.Pop(m.heap).(*task) // O(log(n))
 	heap.Push(m.heap, item)          // O(log(n))
 	return item.Value
 }
 
-// Update of a given task
-func (m *taskQueue) Update(t Task) bool {
+// update of a given task
+func (m *taskQueue) update(t Task) (*future, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	item, ok := m.lookup[t.GetID()]
 	if !ok {
-		return false
+		return nil, false
 	}
 
 	item.priority = t.GetExecution()
 	item.Value = t
 	heap.Fix(m.heap, item.index) // O(log(n))
-	return true
+	return item.future, true
 }
 
-// An Item is something we manage in a priority queue.
-type item struct {
+// a task is something we manage in a priority queue.
+type task struct {
 	Value Task // for storage
 
 	// The index is needed by update and is maintained by the heap.Interface methods.
 	index    int       // The index of the item in the heap.
 	priority time.Time // type of time for priority
+	future   *future
 }
 
 // NewTaskItem creates a new queue item
-func newTaskItem(t Task) *item {
-	return &item{
+func newTaskItem(t Task) *task {
+	return &task{
 		Value:    t,
 		priority: t.GetExecution(),
+		future:   &future{completer: make(chan interface{}, 1)},
 	}
 }
 
-type itemHeap []*item
+type future struct {
+	completer chan interface{}
+}
 
-func (pq itemHeap) Len() int {
+// Get implements TaskFuture interface
+func (f *future) Get() interface{} {
+	return <-f.completer
+}
+
+func (f *future) write(v interface{}) {
+	f.completer <- v // safe
+	close(f.completer)
+}
+
+type taskHeap []*task
+
+func (pq taskHeap) Len() int {
 	return len(pq)
 }
 
-func (pq itemHeap) Less(i, j int) bool {
+func (pq taskHeap) Less(i, j int) bool {
 	return pq[i].priority.Before(pq[j].priority)
 }
 
-func (pq itemHeap) Swap(i, j int) {
+func (pq taskHeap) Swap(i, j int) {
 	pq[i], pq[j] = pq[j], pq[i]
 	pq[i].index = i
 	pq[j].index = j
 }
 
-func (pq *itemHeap) Pop() interface{} {
+func (pq *taskHeap) Pop() interface{} {
 	old := *pq
 	n := len(old)
 	item := old[n-1]
@@ -152,8 +175,8 @@ func (pq *itemHeap) Pop() interface{} {
 	return item
 }
 
-func (pq *itemHeap) Push(x interface{}) {
-	item := x.(*item)
+func (pq *taskHeap) Push(x interface{}) {
+	item := x.(*task)
 	item.index = len(*pq)
 	*pq = append(*pq, item)
 }

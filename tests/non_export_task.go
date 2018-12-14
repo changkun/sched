@@ -11,7 +11,8 @@ import (
 
 // NonExportTask implements task.Interface However it has no
 // export field.
-// NOTE: such tasks are unable to be persist by sched
+// NOTE!!! tasks implemented this way are unable to be persist
+// (and unschedulable) by sched
 type NonExportTask struct {
 	id        string
 	execution time.Time
@@ -65,8 +66,8 @@ func (t *NonExportTask) SetExecution(current time.Time) (old time.Time) {
 }
 
 // Execute is the actual execution block
-func (t *NonExportTask) Execute() (retry bool, fail error) {
+func (t *NonExportTask) Execute() (result interface{}, retry bool, fail error) {
 	O.Push(t.id)
 	fmt.Printf("Execute non export task %s.\n", t.id)
-	return false, nil
+	return nil, false, nil
 }
