@@ -64,7 +64,7 @@ func (t *PanicTask) SetExecution(current time.Time) (old time.Time) {
 }
 
 // Execute is the actual execution block
-func (t *PanicTask) Execute() (retry bool, fail error) {
+func (t *PanicTask) Execute() (result interface{}, retry bool, fail error) {
 	O.Push(t.id)
 	panic(t.id)
 }

@@ -49,8 +49,8 @@ func TestTaskQueue(t *testing.T) {
 	for i := 0; i < l; i++ {
 		task := tpq.Pop()
 		want := fmt.Sprintf("task-%d", l-1-i)
-		if task.GetID() != want {
-			t.Errorf("task has improper task id, want %s, got %s", want, task.GetID())
+		if task.Value.GetID() != want {
+			t.Errorf("task has improper task id, want %s, got %s", want, task.Value.GetID())
 		}
 	}
 }
@@ -62,10 +62,10 @@ func TestTaskQueue_PushFail(t *testing.T) {
 
 	// Insert a new item and then modify its priority.
 	task := tests.NewTask("task-0", start.Add(time.Millisecond*1))
-	if ok := tpq.Push(task); !ok {
+	if _, ok := tpq.Push(task); !ok {
 		t.Error("first push must success!")
 	}
-	if ok := tpq.Push(task); ok {
+	if _, ok := tpq.Push(task); ok {
 		t.Error("second push must fail!")
 	}
 }
@@ -88,7 +88,7 @@ func TestTaskQueue_PeekFail(t *testing.T) {
 func TestTaskQueue_UpdateFail(t *testing.T) {
 	tpq := newTaskQueue()
 	task := tests.NewTask("task-0", time.Now().UTC().Add(time.Millisecond*1))
-	if ok := tpq.Update(task); ok {
+	if _, ok := tpq.Update(task); ok {
 		t.Errorf("update non existing task must be fail!")
 	}
 }

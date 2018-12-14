@@ -76,18 +76,16 @@ func (t *RetryTask) SetExecution(current time.Time) time.Time {
 }
 
 // Execute is the actual execution block
-func (t *RetryTask) Execute() (retry bool, fail error) {
+func (t *RetryTask) Execute() (result interface{}, retry bool, fail error) {
 	if t.RetryCount > t.MaxRetry {
 		O.SetLast(time.Now().UTC())
-		fmt.Printf("Execute retry task %s, retry count: %d, tollerance: %v, last retry.\n", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution()))
-		return false, nil
+		return fmt.Sprintf("execute retry task %s, retry count: %d, tollerance: %v, last retry.", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), false, nil
 
 	}
 	O.Push(t.id)
 	if O.IsFirstZero() {
 		O.SetFirst(time.Now().UTC())
 	}
-	fmt.Printf("Execute retry task %s, retry count: %d. tollerance: %v\n", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution()))
 	t.RetryCount++
-	return true, nil
+	return fmt.Sprintf("execute retry task %s, retry count: %d. tollerance: %v", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), true, nil
 }

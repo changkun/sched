@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,18 +22,6 @@ func strictSleep(latest time.Time) {
 	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
 }
 
-// isTaskScheduled checks if all tasks are scheduled
-func isTaskScheduled() error {
-	keys, err := getRecords()
-	if err != nil {
-		return err
-	}
-	if len(keys) != 0 {
-		return fmt.Errorf("There are tasks unschedued: %v", keys)
-	}
-	return nil
-}
-
 func TestSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
@@ -40,18 +29,18 @@ func TestSchedMasiveSchedule(t *testing.T) {
 
 	start := time.Now().UTC()
 	expectedOrder := []string{}
+
+	futures := make([]*TaskFuture, 20)
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
 		expectedOrder = append(expectedOrder, key)
-		Submit(task)
+		future, _ := Submit(task)
+		futures[i] = future
 	}
-	strictSleep(start.Add(time.Millisecond * 10 * 25))
-
-	if err := isTaskScheduled(); err != nil {
-		t.Error("There are tasks unscheduled")
+	for i := range futures {
+		fmt.Println(futures[i].Get())
 	}
-
 	if !reflect.DeepEqual(expectedOrder, tests.O.Get()) {
 		t.Errorf("execution order wrong, got: %v", tests.O.Get())
 	}
@@ -77,11 +66,14 @@ func TestSchedRecover(t *testing.T) {
 	}
 
 	// recover back
-	if err := sched0.recover(&tests.Task{}); err != nil {
+	futures, err := sched0.recover(&tests.Task{})
+	if err != nil {
 		t.Errorf("recover task with task-unique-id error: %v\n", err)
 		return
 	}
-	strictSleep(start.Add(time.Second))
+	for i := range futures {
+		fmt.Println(futures[i].Get())
+	}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
 	}
@@ -94,12 +86,12 @@ func TestSchedSubmit(t *testing.T) {
 	defer Stop()
 
 	// save task into database
+	futures := make([]*TaskFuture, 10)
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewRetryTask(key, start.Add(time.Millisecond*10*time.Duration(i)), 2)
-		if err := Submit(task); err != nil {
-			t.Fatal("submit task fail:", task)
-		}
+		future, _ := Submit(task)
+		futures[i] = future
 	}
 	want := []string{
 		"task-0", "task-1", "task-2", "task-3", "task-4",
@@ -109,7 +101,9 @@ func TestSchedSubmit(t *testing.T) {
 		"task-7", "task-3", "task-8", "task-4", "task-9",
 		"task-5", "task-6", "task-7", "task-8", "task-9",
 	}
-	strictSleep(start.Add(time.Second))
+	for i := range futures {
+		fmt.Println(futures[i].Get())
+	}
 	if !reflect.DeepEqual(len(tests.O.Get()), len(want)) {
 		t.Errorf("submit retry task execution order is not as expected, want %d, got: %d", len(want), len(tests.O.Get()))
 	}
@@ -125,15 +119,26 @@ func TestSchedSchedule1(t *testing.T) {
 	Submit(task1)
 	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
 	taskAreplica := tests.NewTask("task-1", start.Add(time.Millisecond*10))
-	go Submit(task2)
-	go Trigger(taskAreplica)
 
-	strictSleep(start.Add(time.Second))
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func(t Task) {
+		future, _ := Submit(t)
+		future.Get()
+		wg.Done()
+	}(task2)
+	go func(t Task) {
+		future, _ := Trigger(t)
+		future.Get()
+		wg.Done()
+	}(taskAreplica)
+	wg.Wait()
 	want := []string{"task-1", "task-2"}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
 	}
 }
+
 func TestSchedSchedule2(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
@@ -143,10 +148,21 @@ func TestSchedSchedule2(t *testing.T) {
 	task1 := tests.NewTask("task-1", start.Add(time.Millisecond*100))
 	Submit(task1)
 	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
-	go Submit(task2)
-	go Trigger(task1)
 
-	strictSleep(start.Add(time.Second))
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func(t Task) {
+		future, _ := Submit(t)
+		future.Get()
+		wg.Done()
+	}(task2)
+	go func(t Task) {
+		future, _ := Trigger(t)
+		future.Get()
+		wg.Done()
+	}(task1)
+	wg.Wait()
+
 	want := []string{"task-1", "task-2"}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
@@ -178,7 +194,10 @@ func TestSchedSchedule3(t *testing.T) {
 
 	// task1 with 1 sec later
 	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	Submit(task1)
+	future, err := Submit(task1)
+	if err != nil {
+		t.FailNow()
+	}
 
 	// somehow override database time to 2 sec, the actual execution should be later
 	set("task-1", time.Second*2, &tests.Task{})
@@ -192,8 +211,7 @@ func TestSchedSchedule3(t *testing.T) {
 		t.Errorf("submit task before execution is not as expected, got: %v", tests.O.Get())
 	}
 
-	// sleep 2 sec
-	strictSleep(start.Add(time.Second * 3))
+	fmt.Println(future.Get())
 
 	// should have executed
 	want = []string{"task-1"}
@@ -210,7 +228,7 @@ func TestSchedPause(t *testing.T) {
 	start := time.Now().UTC()
 	// task1 with 1 sec later
 	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	Submit(task1)
+	future, _ := Submit(task1)
 
 	// pause sched and sleep 1 sec, task1 should not be executed
 	Pause()
@@ -223,8 +241,8 @@ func TestSchedPause(t *testing.T) {
 	// at this moment, task-1 should be executed asap
 	// should have executed
 	Resume()
-	// sleep until start+3sec
-	strictSleep(start.Add(time.Second * 3))
+
+	fmt.Println(future.Get())
 	want = []string{"task-1"}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
@@ -237,9 +255,10 @@ func TestSchedStop(t *testing.T) {
 	start := time.Now().UTC()
 	// task1 with 1 sec later
 	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	Submit(task1)
+	future, _ := Submit(task1)
 	time.Sleep(time.Second + 500*time.Millisecond)
 	Stop()
+	fmt.Println(future.Get())
 	want := []string{"task-1"}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
@@ -254,10 +273,11 @@ func TestSchedPanic(t *testing.T) {
 	start := time.Now().UTC()
 	// task1 with 1 sec later
 	task1 := tests.NewPanicTask("task-1", start.Add(time.Second))
-	Submit(task1)
+	future, _ := Submit(task1)
 	time.Sleep(time.Second + 100*time.Millisecond)
 	cache0.DEL(prefixTask + "task-1")
 	Stop()
+	fmt.Println(future.Get())
 	want := []string{"task-1"}
 	if !reflect.DeepEqual(tests.O.Get(), want) {
 		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
@@ -276,12 +296,16 @@ func TestSchedRecoverFail(t *testing.T) {
 	}
 	cache0.Close()
 
-	if err := Init(url, &tests.Task{}); err != nil {
+	futures, err := Init(url, &tests.Task{})
+	if err != nil {
 		t.Errorf("recover task with task-unique-id error: %v\n", err)
 		return
 	}
 	defer Stop()
-	strictSleep(start.Add(time.Second))
+
+	for i := range futures {
+		futures[i].Get()
+	}
 	if !reflect.DeepEqual(tests.O.Get(), []string{}) {
 		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
 	}
@@ -292,13 +316,13 @@ func TestSchedRecoverFail(t *testing.T) {
 func TestSchedError(t *testing.T) {
 	connectCache("redis://127.0.0.1:6379/2")
 	cache0.Close()
-	if err := sched0.recover(&tests.Task{}); err == nil {
+	if _, err := sched0.recover(&tests.Task{}); err == nil {
 		t.Fatalf("recover without conn must error, got nil")
 	}
-	if err := sched0.submit(&tests.Task{}); err == nil {
+	if _, err := sched0.submit(&tests.Task{}); err == nil {
 		t.Fatalf("submit without conn must error, got nil")
 	}
-	if err := sched0.trigger(&tests.Task{}); err == nil {
+	if _, err := sched0.trigger(&tests.Task{}); err == nil {
 		t.Fatalf("trigger without conn must error, got nil")
 	}
 	if _, err := sched0.verify(&tests.Task{}); err == nil {
@@ -317,9 +341,8 @@ func TestSchedError(t *testing.T) {
 		tasks: newTaskQueue(),
 	}
 	sched0.worker()
-	sched0.arrival(&tests.Task{})
-	sched0.execute(&tests.Task{})
-	sched0.retry(&tests.Task{})
+	sched0.arrival(newTaskItem(&tests.Task{}))
+	sched0.execute(newTaskItem(&tests.Task{}))
 	Pause()
 	sched0.worker()
 	Resume()
