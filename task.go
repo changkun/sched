@@ -27,8 +27,5 @@ type TaskFuture struct {
 
 // Get task future
 func (f *TaskFuture) Get() interface{} {
-	select {
-	case v := <-f.v:
-		return v
-	}
+	return <-f.v
 }

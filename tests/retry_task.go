@@ -79,7 +79,9 @@ func (t *RetryTask) SetExecution(current time.Time) time.Time {
 func (t *RetryTask) Execute() (result interface{}, retry bool, fail error) {
 	if t.RetryCount > t.MaxRetry {
 		O.SetLast(time.Now().UTC())
-		return fmt.Sprintf("execute retry task %s, retry count: %d, tollerance: %v, last retry.", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), false, nil
+		return fmt.Sprintf(
+			"retry task %s, retry count: %d, tollerance: %v, last.",
+			t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), false, nil
 
 	}
 	O.Push(t.id)
@@ -87,5 +89,7 @@ func (t *RetryTask) Execute() (result interface{}, retry bool, fail error) {
 		O.SetFirst(time.Now().UTC())
 	}
 	t.RetryCount++
-	return fmt.Sprintf("execute retry task %s, retry count: %d. tollerance: %v", t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), true, nil
+	return fmt.Sprintf(
+		"retry task %s, retry count: %d. tollerance: %v",
+		t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), true, nil
 }
