@@ -35,7 +35,6 @@ type taskQueue struct {
 	mu     sync.Mutex
 }
 
-// NewTaskQueue .
 func newTaskQueue() *taskQueue {
 	pq := &taskHeap{}
 	heap.Init(pq)
@@ -45,15 +44,15 @@ func newTaskQueue() *taskQueue {
 	}
 }
 
-// Len of queue
-func (m *taskQueue) Len() int {
+// length of queue
+func (m *taskQueue) length() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.heap.Len()
 }
 
-// Push item
-func (m *taskQueue) Push(t Task) (*TaskFuture, bool) {
+// push item
+func (m *taskQueue) push(t Task) (*future, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,7 +66,7 @@ func (m *taskQueue) Push(t Task) (*TaskFuture, bool) {
 	return item.future, true
 }
 
-func (m *taskQueue) PushNew(t *task) {
+func (m *taskQueue) pushBack(t *task) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -76,7 +75,7 @@ func (m *taskQueue) PushNew(t *task) {
 }
 
 // Pop item
-func (m *taskQueue) Pop() *task {
+func (m *taskQueue) pop() *task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -89,8 +88,8 @@ func (m *taskQueue) Pop() *task {
 	return item
 }
 
-// Peek the top priority item without deletion
-func (m *taskQueue) Peek() Task {
+// peek the top priority item without deletion
+func (m *taskQueue) peek() Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -103,8 +102,8 @@ func (m *taskQueue) Peek() Task {
 	return item.Value
 }
 
-// Update of a given task
-func (m *taskQueue) Update(t Task) (*TaskFuture, bool) {
+// update of a given task
+func (m *taskQueue) update(t Task) (*future, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -124,21 +123,32 @@ type task struct {
 	Value Task // for storage
 
 	// The index is needed by update and is maintained by the heap.Interface methods.
-	index     int       // The index of the item in the heap.
-	priority  time.Time // type of time for priority
-	completer chan interface{}
-	future    *TaskFuture
+	index    int       // The index of the item in the heap.
+	priority time.Time // type of time for priority
+	future   *future
 }
 
 // NewTaskItem creates a new queue item
 func newTaskItem(t Task) *task {
-	v := make(chan interface{}, 1)
 	return &task{
-		Value:     t,
-		priority:  t.GetExecution(),
-		completer: v,
-		future:    &TaskFuture{v},
+		Value:    t,
+		priority: t.GetExecution(),
+		future:   &future{completer: make(chan interface{}, 1)},
 	}
+}
+
+type future struct {
+	completer chan interface{}
+}
+
+// Get implements TaskFuture interface
+func (f *future) Get() interface{} {
+	return <-f.completer
+}
+
+func (f *future) write(v interface{}) {
+	f.completer <- v // safe
+	close(f.completer)
 }
 
 type taskHeap []*task

@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package sched provides a consistently reliable task scheduler with future support
+Package sched provides a consistently reliable task scheduler with future support.
 
 Introduction
 
@@ -26,7 +26,11 @@ sched schedules different tasks in a priority queue and schedules task with
 minimum goroutines when tasks with same execution time arrival:
 
 	// Init sched, with tasks should recovered when reboot
-	futures, err := sched.Init("redis://127.0.0.1:6379/1"， &ArbitraryTask1{}, &ArbitraryTask2{})
+	futures, err := sched.Init(
+		"redis://127.0.0.1:6379/1"，
+		&ArbitraryTask1{},
+		&ArbitraryTask2{},
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -36,26 +40,26 @@ minimum goroutines when tasks with same execution time arrival:
 	}
 
 	// Setup tasks, use future.Get() to retrieve the future of task
-	future, err := sched.Submit(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	future, err := sched.Submit(&ArbitraryTask{...})
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("%v", future.Get())
 
 	// Launch a task, use future.Get() to retrieve the future of task
-	future, err := sched.Trigger(&ArbitraryTask1{...}, &ArbitraryTask2{...})
+	future, err := sched.Trigger(&ArbitraryTask{...})
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("%v", future.Get())
 
-	// Pause scheduling
+	// Pause sched
 	sched.Pause()
 
-	// Resume scheduling
+	// Resume sched
 	sched.Resume()
 
-	// Stop scheduler gracefully
+	// Stop sched gracefully
 	sched.Stop()
 
 Task interface

@@ -30,7 +30,7 @@ func TestSchedMasiveSchedule(t *testing.T) {
 	start := time.Now().UTC()
 	expectedOrder := []string{}
 
-	futures := make([]*TaskFuture, 20)
+	futures := make([]TaskFuture, 20)
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
@@ -86,7 +86,7 @@ func TestSchedSubmit(t *testing.T) {
 	defer Stop()
 
 	// save task into database
-	futures := make([]*TaskFuture, 10)
+	futures := make([]TaskFuture, 10)
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("task-%d", i)
 		task := tests.NewRetryTask(key, start.Add(time.Millisecond*10*time.Duration(i)), 2)

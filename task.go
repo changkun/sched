@@ -21,11 +21,6 @@ type Task interface {
 }
 
 // TaskFuture is the future of Task execution
-type TaskFuture struct {
-	v <-chan interface{}
-}
-
-// Get task future
-func (f *TaskFuture) Get() interface{} {
-	return <-f.v
+type TaskFuture interface {
+	Get() interface{}
 }

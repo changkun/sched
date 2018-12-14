@@ -16,7 +16,7 @@ import (
 )
 
 // Init initialize task scheduler
-func Init(db string, all ...Task) ([]*TaskFuture, error) {
+func Init(db string, all ...Task) ([]TaskFuture, error) {
 	connectCache(db)
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
@@ -55,12 +55,12 @@ func Stop() {
 }
 
 // Submit given tasks
-func Submit(t Task) (*TaskFuture, error) {
+func Submit(t Task) (TaskFuture, error) {
 	return sched0.submit(t)
 }
 
 // Trigger given tasks immediately
-func Trigger(t Task) (*TaskFuture, error) {
+func Trigger(t Task) (TaskFuture, error) {
 	return sched0.trigger(t)
 }
 
@@ -118,7 +118,7 @@ type sched struct {
 	tasks *taskQueue
 }
 
-func (s *sched) recover(ts ...Task) (futures []*TaskFuture, err error) {
+func (s *sched) recover(ts ...Task) (futures []TaskFuture, err error) {
 	ids, err := getRecords()
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func (s *sched) recover(ts ...Task) (futures []*TaskFuture, err error) {
 	return
 }
 
-func (s *sched) load(id string, t Task) (*TaskFuture, error) {
+func (s *sched) load(id string, t Task) (TaskFuture, error) {
 	r := &record{ID: id}
 	if err := r.read(); err != nil {
 		return nil, err
@@ -160,12 +160,12 @@ func (s *sched) load(id string, t Task) (*TaskFuture, error) {
 	}
 	temp2.SetID(id)
 	temp2.SetExecution(r.Execution)
-	future, _ := s.tasks.Push(temp2)
+	future, _ := s.tasks.push(temp2)
 	return future, nil
 }
 
 // submit given tasks
-func (s *sched) submit(t Task) (future *TaskFuture, err error) {
+func (s *sched) submit(t Task) (future TaskFuture, err error) {
 	// save asap
 	if err = save(t); err != nil {
 		return
@@ -175,21 +175,21 @@ func (s *sched) submit(t Task) (future *TaskFuture, err error) {
 }
 
 // trigger given tasks immediately
-func (s *sched) trigger(t Task) (*TaskFuture, error) {
+func (s *sched) trigger(t Task) (TaskFuture, error) {
 	t.SetExecution(time.Now().UTC())
 	return s.submit(t)
 }
 
-func (s *sched) schedule(t Task) *TaskFuture {
+func (s *sched) schedule(t Task) TaskFuture {
 	s.pause()
 	defer s.resume()
 
 	// if priority is able to be update
-	if future, ok := s.tasks.Update(t); ok {
+	if future, ok := s.tasks.update(t); ok {
 		return future
 	}
 
-	future, _ := s.tasks.Push(t)
+	future, _ := s.tasks.push(t)
 	return future
 }
 
@@ -236,7 +236,7 @@ func (s *sched) ispausing() bool {
 }
 
 func (s *sched) resume() {
-	t := s.tasks.Peek()
+	t := s.tasks.peek()
 	if t == nil {
 		return
 	}
@@ -261,7 +261,7 @@ func (s *sched) worker() {
 
 	// medium path.
 	// stop execution if task queue is empty
-	task := s.tasks.Pop()
+	task := s.tasks.pop()
 	if task == nil {
 		return
 	}
@@ -303,7 +303,7 @@ func (s *sched) reschedule(t *task, when time.Time) {
 	save(t.Value)
 
 	s.pause()
-	s.tasks.PushNew(t)
+	s.tasks.pushBack(t)
 	s.resume()
 }
 
@@ -313,7 +313,7 @@ func (s *sched) execute(t *task) {
 	defer atomic.AddUint64(&s.running, ^uint64(0)) // -1
 	defer func() {
 		if r := recover(); r != nil {
-			t.completer <- fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r)
+			t.future.write(fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
 		}
 	}()
 
@@ -332,9 +332,7 @@ func (s *sched) execute(t *task) {
 		s.reschedule(t, t.Value.GetRetryTime())
 		return
 	}
-	t.completer <- result
-	close(t.completer)
-
+	t.future.write(result)
 	// NOTE: Generally this is not able to be fail.
 	// However it may caused by the lost of connection.
 	// Though task will be recovered when app restarts,
