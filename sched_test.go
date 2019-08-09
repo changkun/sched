@@ -22,6 +22,13 @@ func strictSleep(latest time.Time) {
 	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
 }
 
+func TestSchedInitFail(t *testing.T) {
+	_, err := Init("rdis://127.0.0.1:6323/123123")
+	if err == nil {
+		t.Fatal("Init with wrong format is sucess: ", err)
+	}
+}
+
 func TestSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
@@ -89,8 +96,11 @@ func TestSchedSubmit(t *testing.T) {
 	futures := make([]TaskFuture, 10)
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("task-%d", i)
-		task := tests.NewRetryTask(key, start.Add(time.Millisecond*10*time.Duration(i)), 2)
-		future, _ := Submit(task)
+		task := tests.NewRetryTask(key, start.Add(time.Millisecond*100*time.Duration(i)), 2)
+		future, err := Submit(task)
+		if err != nil {
+			t.Fatalf("submit task failed: task %+v, err: %+v", task, err)
+		}
 		futures[i] = future
 	}
 	want := []string{
@@ -102,7 +112,7 @@ func TestSchedSubmit(t *testing.T) {
 		"task-5", "task-6", "task-7", "task-8", "task-9",
 	}
 	for i := range futures {
-		fmt.Println(futures[i].Get())
+		fmt.Printf("%v: %v\n", i, futures[i].Get())
 	}
 	if !reflect.DeepEqual(len(tests.O.Get()), len(want)) {
 		t.Errorf("submit retry task execution order is not as expected, want %d, got: %d", len(want), len(tests.O.Get()))
@@ -170,7 +180,7 @@ func TestSchedSchedule2(t *testing.T) {
 }
 
 func set(key string, postpone time.Duration, t Task) {
-	result, _ := cache0.GET(prefixTask + key)
+	result, _ := sched0.cache.Get(prefixTask + key)
 	r := &record{}
 	json.Unmarshal([]byte(result), r)
 	d, _ := json.Marshal(r.Data)
@@ -183,7 +193,7 @@ func set(key string, postpone time.Duration, t Task) {
 		Execution: temp.GetExecution(),
 		Data:      temp,
 	})
-	cache0.SET(prefixTask+temp.GetID(), string(data))
+	sched0.cache.Set(prefixTask+temp.GetID(), string(data))
 }
 
 func TestSchedSchedule3(t *testing.T) {
@@ -275,7 +285,7 @@ func TestSchedPanic(t *testing.T) {
 	task1 := tests.NewPanicTask("task-1", start.Add(time.Second))
 	future, _ := Submit(task1)
 	time.Sleep(time.Second + 100*time.Millisecond)
-	cache0.DEL(prefixTask + "task-1")
+	sched0.cache.Del(prefixTask + "task-1")
 	Stop()
 	fmt.Println(future.Get())
 	want := []string{"task-1"}
@@ -288,13 +298,13 @@ func TestSchedRecoverFail(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 	url := "redis://127.0.0.1:6379/2"
-	connectCache(url)
+	Init(url)
 	task := tests.NewNonExportTask("task-0", start.Add(time.Millisecond*10))
 	if err := save(task); err != nil {
 		t.Errorf("store with task-unique-id error: %v\n", err)
 		return
 	}
-	cache0.Close()
+	sched0.cache.Close()
 
 	futures, err := Init(url, &tests.Task{})
 	if err != nil {
@@ -310,12 +320,12 @@ func TestSchedRecoverFail(t *testing.T) {
 		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
 	}
 
-	cache0.DEL(prefixTask + "task-0")
+	sched0.cache.Del(prefixTask + "task-0")
 }
 
 func TestSchedError(t *testing.T) {
-	connectCache("redis://127.0.0.1:6379/2")
-	cache0.Close()
+	Init("redis://127.0.0.1:6379/2")
+	sched0.cache.Close()
 	if _, err := sched0.recover(&tests.Task{}); err == nil {
 		t.Fatalf("recover without conn must error, got nil")
 	}
@@ -339,6 +349,7 @@ func TestSchedError(t *testing.T) {
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),
+		cache: sched0.cache,
 	}
 	sched0.worker()
 	sched0.arrival(newTaskItem(&tests.Task{}))
@@ -347,7 +358,7 @@ func TestSchedError(t *testing.T) {
 	sched0.worker()
 	Resume()
 
-	connectCache("redis://127.0.0.1:6379/2")
+	Init("redis://127.0.0.1:6379/2")
 	r = record{
 		ID:        "error",
 		Execution: time.Now(),
@@ -356,11 +367,11 @@ func TestSchedError(t *testing.T) {
 	if err := r.save(); err != nil {
 		t.Fatalf("save object must not nil, got %v", err)
 	}
-	cache0.Close()
+	sched0.cache.Close()
 	sched0.load("error", &tests.Task{})
-	connectCache("redis://127.0.0.1:6379/2")
-	cache0.DEL(prefixTask + "error")
-	cache0.Close()
+	Init("redis://127.0.0.1:6379/2")
+	sched0.cache.Del(prefixTask + "error")
+	sched0.cache.Close()
 }
 
 func TestSchedStop2(t *testing.T) {
@@ -368,7 +379,7 @@ func TestSchedStop2(t *testing.T) {
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),
 	}
-	connectCache("redis://127.0.0.1:6379/2")
+	Init("redis://127.0.0.1:6379/2")
 	atomic.AddUint64(&sched0.running, 2)
 	sign1 := make(chan int, 1)
 	sign2 := make(chan int, 1)

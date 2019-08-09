@@ -14,14 +14,14 @@ import (
 // RetryTask implements task.Interface However it has no
 // export field, which is not able to be scheduled by sched
 type RetryTask struct {
-	RetryCount int
-	MaxRetry   int
+	RetryCount int64
+	MaxRetry   int64
 	id         string
 	execution  time.Time
 }
 
 // NewRetryTask creates a task
-func NewRetryTask(id string, e time.Time, maxRetry int) *RetryTask {
+func NewRetryTask(id string, e time.Time, maxRetry int64) *RetryTask {
 	return &RetryTask{
 		RetryCount: 0,
 		MaxRetry:   maxRetry,
@@ -44,12 +44,12 @@ func (t *RetryTask) GetExecution() (execute time.Time) {
 
 // GetTimeout get timeout of execution
 func (t *RetryTask) GetTimeout() (executeTimeout time.Duration) {
-	return time.Second
+	return time.Millisecond
 }
 
 // GetRetryTime get retry execution duration
 func (t *RetryTask) GetRetryTime() time.Time {
-	return time.Now().UTC().Add(time.Millisecond * 42)
+	return time.Now().UTC().Add(time.Millisecond * 100)
 }
 
 // SetID sets the id of a task
@@ -88,7 +88,7 @@ func (t *RetryTask) Execute() (result interface{}, retry bool, fail error) {
 	if O.IsFirstZero() {
 		O.SetFirst(time.Now().UTC())
 	}
-	t.RetryCount++
+	atomic.AddInt64(&t.RetryCount, 1)
 	return fmt.Sprintf(
 		"retry task %s, retry count: %d. tollerance: %v",
 		t.id, t.RetryCount, time.Now().UTC().Sub(t.GetExecution())), true, nil

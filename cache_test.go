@@ -13,26 +13,33 @@ import (
 func TestRedis(t *testing.T) {
 	key := "123"
 	val := "456"
+	url := "redis://127.0.0.1:6379/2"
 
 	t.Run("cache-connect", func(t *testing.T) {
-		connectCache("redis://127.0.0.1:6379/2")
-		err := cache0.pool.Close()
+		c, err := newCache(url)
+		if err != nil {
+			t.Fatalf("new client failed: %v", err)
+		}
+		err = c.Close()
 		if err != nil {
 			t.Fatalf("close cache pool error: %v", err)
 		}
 	})
 
-	connectCache("redis://127.0.0.1:6379/2")
+	c, err := newCache(url)
+	if err != nil {
+		t.Fatalf("new client failed: %v", err)
+	}
 
 	t.Run("cache-set", func(t *testing.T) {
-		err := cache0.SET(key, val)
+		err := c.Set(key, val)
 		if err != nil {
 			t.Fatal("cache SET must success!")
 		}
 	})
 
 	t.Run("cache-get", func(t *testing.T) {
-		v, err := cache0.GET(key)
+		v, err := c.client.Get(key).Result()
 		if err != nil {
 			t.Fatalf("cache GET must success, err: %v", err)
 		}
@@ -42,7 +49,7 @@ func TestRedis(t *testing.T) {
 	})
 
 	t.Run("cache-keys", func(t *testing.T) {
-		keys, err := cache0.KEYS(key)
+		keys, err := c.Keys(key)
 		if err != nil {
 			t.Fatalf("cache KEYS must success, err: %v", err)
 		}
@@ -52,75 +59,42 @@ func TestRedis(t *testing.T) {
 	})
 
 	t.Run("cache-del", func(t *testing.T) {
-		err := cache0.DEL(key)
+		err := c.Del(key)
 		if err != nil {
 			t.Fatal("cache DEL must success")
 		}
-		_, err = cache0.GET(key)
+		_, err = c.Get(key)
 		if err == nil {
 			t.Fatal("cache GET after DEL must error, got nil")
 		}
 	})
 
 	t.Run("cache-setnx-success", func(t *testing.T) {
-		_, err := cache0.SETNX(key, val, time.Second)
+		_, err := c.SetNX(key, val, time.Second)
 		if err != nil {
 			t.Fatal("SETEX must success!")
 		}
 		time.Sleep(time.Second * 2)
-		_, err = cache0.GET(key)
+		_, err = c.Get(key)
 		if err == nil {
 			t.Errorf("cache GET empty must error, got nil")
 		}
 	})
 
 	t.Run("cache-setnx-fail", func(t *testing.T) {
-		_, err := cache0.SETNX(key, val, time.Second)
+		_, err := c.SetNX(key, val, time.Second)
 		if err != nil {
 			t.Fatal("cache SETNX must success!")
 		}
-		_, err = cache0.SETNX(key, val, time.Second)
-		if err == nil {
+		ok, err := c.SetNX(key, "random", time.Second)
+		if ok != false && err == nil {
 			t.Fatal("cache SETNX must fail after SETNX!")
 		}
 		time.Sleep(time.Second * 2)
-		_, err = cache0.GET(key)
+		_, err = c.Get(key)
 		if err == nil {
 			t.Errorf("cache GET empty must error, got nil")
 		}
 	})
-
-	t.Run("cache-exists-ttl-persist", func(t *testing.T) {
-		_, err := cache0.SETNX(key, val, time.Second)
-		if err != nil {
-			t.Fatal("cache SETNX must success!")
-		}
-		ok, err := cache0.EXISTS(key)
-		if err != nil {
-			t.Fatalf("cache EXISTS must success, err: %v", err)
-		}
-		if !ok {
-			t.Fatal("cache EXISTS must return exist, got false")
-		}
-		d, err := cache0.TTL(key)
-		if err != nil {
-			t.Fatalf("cache TTL must success, err: %v", err)
-		}
-		if d < 0 {
-			t.Fatalf("cache TTL get negative duration: %d", d)
-		}
-		ok, err = cache0.PERSIST(key)
-		if err != nil {
-			t.Fatalf("cache PERSIST must success, err: %v", err)
-		}
-		if !ok {
-			t.Fatal("cache PERSIST must return true, got false")
-		}
-		err = cache0.DEL(key)
-		if err != nil {
-			t.Fatal("cache DEL must success")
-		}
-	})
-
-	cache0.Close()
+	c.Close()
 }

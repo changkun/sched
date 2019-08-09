@@ -17,10 +17,14 @@ import (
 
 // Init initialize task scheduler
 func Init(db string, all ...Task) ([]TaskFuture, error) {
-	connectCache(db)
+	c, err := newCache(db)
+	if err != nil {
+		return nil, err
+	}
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),
+		cache: c,
 	}
 	return sched0.recover(all...)
 }
@@ -51,7 +55,7 @@ func Stop() {
 		runtime.Gosched()
 	}
 
-	cache0.Close()
+	sched0.cache.Close()
 }
 
 // Submit given tasks
@@ -116,6 +120,8 @@ type sched struct {
 	timer unsafe.Pointer // *time.Timer
 	// tasks is a TaskQueue that stores all unscheduled tasks in memory
 	tasks *taskQueue
+	// cache store
+	cache *cache
 }
 
 func (s *sched) recover(ts ...Task) (futures []TaskFuture, err error) {
@@ -271,15 +277,22 @@ func (s *sched) worker() {
 }
 
 func (s *sched) arrival(t *task) {
-	ok, err := lock(t.Value)
+	// record running tasks
+	// note that this must be placed in arrival because
+	// s.cache may be early closed and then unlock will fail to delete lock.
+	atomic.AddUint64(&s.running, 1)
+	defer atomic.AddUint64(&s.running, ^uint64(0)) // -1
+
+	ok, err := s.lock(t.Value)
 	if err != nil || !ok {
 		return
 	}
 
 	s.execute(t)
-	// no need to hadle unlock fail
-	// since there is a timeout on cache
-	unlock(t.Value)
+	// no need to hadle unlock fail since there is a timeout on cache
+	// note that we must guarantee the task will never be arrival if the lock is not released.
+	// refer to the s.running in above.
+	s.unlock(t.Value)
 }
 
 func (s *sched) verify(t Task) (*time.Time, error) {
@@ -308,9 +321,6 @@ func (s *sched) reschedule(t *task, when time.Time) {
 }
 
 func (s *sched) execute(t *task) {
-	// record running tasks
-	atomic.AddUint64(&s.running, 1)
-	defer atomic.AddUint64(&s.running, ^uint64(0)) // -1
 	defer func() {
 		if r := recover(); r != nil {
 			t.future.write(fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
@@ -338,7 +348,7 @@ func (s *sched) execute(t *task) {
 	// Though task will be recovered when app restarts,
 	// but it may leads an inconsistency, we need other
 	// means to solve this problem
-	del(t.Value)
+	s.del(t.Value)
 }
 
 // sched prefix for records
@@ -358,18 +368,18 @@ func save(t Task) error {
 }
 
 // del deletes record by id
-func del(t Task) {
-	cache0.DEL(prefixTask + t.GetID())
+func (s *sched) del(t Task) {
+	s.cache.Del(prefixTask + t.GetID())
 }
 
 // lock the given task
-func lock(t Task) (bool, error) {
-	return cache0.SETNX(prefixLock+t.GetID(), "locking", t.GetTimeout())
+func (s *sched) lock(t Task) (bool, error) {
+	return s.cache.SetNX(prefixLock+t.GetID(), "locking", t.GetTimeout())
 }
 
 // unlock the given task explicitly
-func unlock(t Task) {
-	cache0.DEL(prefixLock + t.GetID())
+func (s *sched) unlock(t Task) {
+	s.cache.Del(prefixLock + t.GetID())
 }
 
 // record of a schedule
@@ -381,7 +391,7 @@ type record struct {
 
 // getRecords all records keys
 func getRecords() (keys []string, err error) {
-	keys, err = cache0.KEYS(prefixTask)
+	keys, err = sched0.cache.Keys(prefixTask)
 	ids := []string{}
 	for _, key := range keys {
 		ids = append(ids, strings.TrimPrefix(key, prefixTask))
@@ -391,7 +401,7 @@ func getRecords() (keys []string, err error) {
 
 // Read record with specified ID
 func (r *record) read() (err error) {
-	reply, err := cache0.GET(prefixTask + r.ID)
+	reply, err := sched0.cache.Get(prefixTask + r.ID)
 	if err != nil {
 		return
 	}
@@ -405,6 +415,6 @@ func (r *record) save() (err error) {
 	if err != nil {
 		return
 	}
-	err = cache0.SET(prefixTask+r.ID, string(data))
+	err = sched0.cache.Set(prefixTask+r.ID, string(data))
 	return
 }
