@@ -416,3 +416,23 @@ func TestSchedStop2(t *testing.T) {
 	}
 
 }
+
+func BenchmarkSubmit(b *testing.B) {
+	start := time.Now().UTC()
+	Init("redis://127.0.0.1:6379/2")
+	defer Stop()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		key := fmt.Sprintf("task-%d", i)
+		task := tests.NewTask(key, start.Add(time.Second*time.Duration(i)))
+		b.StartTimer()
+		_, err := Submit(task)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Submit failed: %v", err)
+		}
+		b.StartTimer()
+	}
+}
