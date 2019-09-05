@@ -231,21 +231,92 @@ func BenchmarkSubmit(b *testing.B) {
 	// go tool pprof -http=:8080 cpu.prof
 	// go tool pprof -http=:8080 mem.prof
 	// go tool trace trace.out
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		t1 := tests.NewTask(fmt.Sprintf("task-%d", i), time.Now().Add(time.Millisecond))
-		t2 := tests.NewTask(fmt.Sprintf("task-%d", i+1), time.Now().Add(time.Millisecond))
-		t3 := tests.NewTask(fmt.Sprintf("task-%d", i+2), time.Now().Add(time.Second))
-		t4 := tests.NewTask(fmt.Sprintf("task-%d", i+3), time.Now().Add(time.Second))
-		b.StartTimer()
+	for size := 1; size < 10; size += 100 {
+		println("size: ", size)
+		b.Run(fmt.Sprintf("#tasks-%d", size), func(b *testing.B) {
+			ts := newTasks(size)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				// prepare problem size
+				b.StopTimer()
+				for j := 0; j < size-1; j++ {
+					Submit(ts[j])
+				}
+				b.StartTimer()
 
-		_ = Submit(t1)
-		_ = Submit(t2)
-		_ = Submit(t3)
-		_ = Submit(t4)
-		_ = Trigger(t3)
-		_ = Trigger(t4)
-		Wait()
+				// enqueue under the problem size
+				Submit(ts[size-1])
+				Wait()
+			}
+		})
 	}
+}
+
+func newTasks(size int) []Task {
+	ts := make([]Task, size)
+	for i := 0; i < size; i++ {
+		ts[i] = newZeroTask(fmt.Sprintf("task-%d", i), time.Now().Add(time.Millisecond))
+	}
+	return ts
+}
+
+// tt implements tt.Interface
+type tt struct {
+	Public    string
+	id        string
+	execution time.Time
+}
+
+// newZeroTask creates a task
+func newZeroTask(id string, e time.Time) *tt {
+	return &tt{
+		Public:    "not nil",
+		id:        id,
+		execution: e,
+	}
+}
+
+// GetID get task id
+func (t *tt) GetID() (id string) {
+	id = t.id
+	return
+}
+
+// GetExecution get execution time
+func (t *tt) GetExecution() (execute time.Time) {
+	execute = t.execution
+	return
+}
+
+// GetTimeout get timeout of execution
+func (t *task) GetTimeout() (executeTimeout time.Duration) {
+	return time.Second
+}
+
+// GetRetryTime get retry execution duration
+func (t *tt) GetRetryTime() time.Time {
+	return time.Now().UTC().Add(time.Second)
+}
+
+// SetID sets the id of a task
+func (t *tt) SetID(id string) {
+	t.id = id
+}
+
+// IsValidID check id is valid
+func (t *tt) IsValidID() bool {
+	return true
+}
+
+// SetExecution sets the execution time of a task
+func (t *tt) SetExecution(current time.Time) (old time.Time) {
+	old = t.execution
+	t.execution = current
+	return
+}
+
+// Execute is the actual execution block
+func (t *tt) Execute() (result interface{}, retry bool, fail error) {
+	result = 1 // avoid allocation
+	return
 }

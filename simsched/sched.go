@@ -152,28 +152,31 @@ func (s *sched) trigger(t Task) TaskFuture {
 
 func (s *sched) schedule(t Task) TaskFuture {
 	s.pause()
-	defer s.resume()
 
 	// if priority is able to be update
 	if future, ok := s.tasks.update(t); ok {
+		s.resume()
 		return future
 	}
 
 	future, _ := s.tasks.push(t)
+	s.resume()
 	return future
 }
 
 func (s *sched) setTimer(d time.Duration) {
-	// newt := time.NewTimer(duration)
 	for {
+		// fast path: reuse the timer
 		old := atomic.LoadPointer(&s.timer)
+		if old != nil && (*time.Timer)(old).Stop() {
+			(*time.Timer)(old).Reset(d)
+			return
+		}
+
+		// slow path: fail to stop, use a new timer.
 		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(d))) {
-			tt := (*time.Timer)(old)
-			if tt != nil {
-				if tt.Stop() {
-					tt.Reset(d)
-					atomic.StorePointer(&s.timer, unsafe.Pointer(tt))
-				}
+			if old != nil {
+				(*time.Timer)(old).Stop()
 			}
 			return
 		}
@@ -215,17 +218,17 @@ func (s *sched) resume() {
 		return
 	}
 	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
-	go s.timing()
+	// TODO: reuse goroutine here
+	go func() {
+		timer := s.getTimer()
+		if timer == nil {
+			return
+		}
+		<-timer.C
+		s.worker()
+	}()
 }
 
-func (s *sched) timing() {
-	timer := s.getTimer()
-	if timer == nil {
-		return
-	}
-	<-timer.C
-	s.worker()
-}
 func (s *sched) worker() {
 	// fast path.
 	// if sched requires pausing, then stop executing and resume it.
@@ -261,7 +264,9 @@ func (s *sched) reschedule(t *task, when time.Time) {
 func (s *sched) execute(t *task) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.future.write(fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
+			t.future.write(
+				fmt.Errorf("sched: task %s panic while executing, reason: %v",
+					t.Value.GetID(), r))
 		}
 	}()
 
@@ -276,6 +281,7 @@ func (s *sched) execute(t *task) {
 		s.reschedule(t, t.Value.GetRetryTime())
 		return
 	}
+	// avoid nil result
 	if result == nil {
 		result = fmt.Sprintf("sched: task %s success with nil return", t.Value.GetID())
 	}
@@ -327,64 +333,68 @@ func (m *taskQueue) length() (l int) {
 // push item
 func (m *taskQueue) push(t Task) (*future, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	old, ok := m.lookup[t.GetID()] // O(1) amortized
 	if ok {
+		m.mu.Unlock()
 		return old.future, false
 	}
 	item := newTaskItem(t)
 	heap.Push(m.heap, item)    // O(log(n))
 	m.lookup[t.GetID()] = item // O(1)
+	m.mu.Unlock()
 	return item.future, true
 }
 
 func (m *taskQueue) pushBack(t *task) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	heap.Push(m.heap, t)          // O(log(n))
 	m.lookup[t.Value.GetID()] = t // O(1)
+	m.mu.Unlock()
 }
 
 // Pop item
 func (m *taskQueue) pop() *task {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.heap.Len() == 0 {
+		m.mu.Unlock()
 		return nil
 	}
 
 	item := heap.Pop(m.heap).(*task)     // O(log(n))
 	delete(m.lookup, item.Value.GetID()) // O(1) amortized
+	m.mu.Unlock()
 	return item
 }
 
 // peek the top priority item without deletion
-func (m *taskQueue) peek() Task {
+func (m *taskQueue) peek() (t Task) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.heap.Len() == 0 {
+		m.mu.Unlock()
 		return nil
 	}
-	return (*m.heap)[0].Value
+	t = (*m.heap)[0].Value
+	m.mu.Unlock()
+	return
 }
 
 // update of a given task
 func (m *taskQueue) update(t Task) (*future, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	item, ok := m.lookup[t.GetID()]
 	if !ok {
+		m.mu.Unlock()
 		return nil, false
 	}
 
 	item.priority = t.GetExecution()
 	item.Value = t
 	heap.Fix(m.heap, item.index) // O(log(n))
+	m.mu.Unlock()
 	return item.future, true
 }
 
