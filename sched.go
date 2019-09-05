@@ -149,26 +149,14 @@ func (s *sched) load(id string, t Task) (TaskFuture, error) {
 
 	data, _ := json.Marshal(r.Data)
 
-	var temp1, temp2 Task
-	if runtime.Version() == "go1.13" {
-		temp2 = reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-		json.Unmarshal(data, &temp2)
-		if temp2 == nil || reflect.ValueOf(temp2).Elem().IsZero() || !temp2.IsValidID() {
-			return nil, nil
-		}
-	} else {
-		// Note: The following comparison check if temp2 is parsed as zero value.
-		// This aims to backward compatibility <= go1.12
-		temp1 = reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-		temp2 = reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-		json.Unmarshal(data, &temp2)
-		if reflect.DeepEqual(temp1, temp2) || temp2 == nil || !temp2.IsValidID() {
-			return nil, nil
-		}
+	v := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
+	json.Unmarshal(data, &v)
+	if v == nil || reflect.ValueOf(v).Elem().IsZero() || !v.IsValidID() {
+		return nil, nil
 	}
-	temp2.SetID(id)
-	temp2.SetExecution(r.Execution)
-	future, _ := s.tasks.push(temp2)
+	v.SetID(id)
+	v.SetExecution(r.Execution)
+	future, _ := s.tasks.push(v)
 	return future, nil
 }
 
