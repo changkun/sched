@@ -7,7 +7,6 @@ package sched
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -139,25 +138,6 @@ func (s *sched) recover(ts ...Task) (futures []TaskFuture, err error) {
 	}
 	s.resume()
 	return
-}
-
-func (s *sched) load(id string, t Task) (TaskFuture, error) {
-	r := &record{ID: id}
-	if err := r.read(); err != nil {
-		return nil, err
-	}
-
-	data, _ := json.Marshal(r.Data)
-
-	v := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-	json.Unmarshal(data, &v)
-	if v == nil || reflect.ValueOf(v).Elem().IsZero() || !v.IsValidID() {
-		return nil, nil
-	}
-	v.SetID(id)
-	v.SetExecution(r.Execution)
-	future, _ := s.tasks.push(v)
-	return future, nil
 }
 
 // submit given tasks
