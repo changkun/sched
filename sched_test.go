@@ -17,6 +17,11 @@ import (
 	"github.com/changkun/sched/tests"
 )
 
+// sleep to wait execution, a strict wait tolerance: 100 milliseconds
+func strictSleep(latest time.Time) {
+	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
+}
+
 func TestSchedInitFail(t *testing.T) {
 	_, err := Init("rdis://127.0.0.1:6323/123123")
 	if err == nil {
@@ -25,6 +30,13 @@ func TestSchedInitFail(t *testing.T) {
 }
 
 func TestSchedMasiveSchedule(t *testing.T) {
+	// ng := runtime.NumGoroutine()
+	// defer func() {
+	// 	if ng != runtime.NumGoroutine() {
+	// 		t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+	// 	}
+	// }()
+
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
 	defer Stop()

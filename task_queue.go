@@ -7,6 +7,7 @@ package sched
 import (
 	"container/heap"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -133,22 +134,24 @@ func newTaskItem(t Task) *task {
 	return &task{
 		Value:    t,
 		priority: t.GetExecution(),
-		future:   &future{completer: make(chan interface{}, 1)},
+		future:   &future{},
 	}
 }
 
 type future struct {
-	completer chan interface{}
+	value atomic.Value
 }
 
 // Get implements TaskFuture interface
-func (f *future) Get() interface{} {
-	return <-f.completer
+func (f *future) Get() (v interface{}) {
+	// spin until value is stored in future.value
+	for ; v == nil; v = f.value.Load() {
+	}
+	return
 }
 
-func (f *future) write(v interface{}) {
-	f.completer <- v // safe
-	close(f.completer)
+func (f *future) put(v interface{}) {
+	f.value.Store(v)
 }
 
 type taskHeap []*task
