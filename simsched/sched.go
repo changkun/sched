@@ -86,17 +86,6 @@ var sched0 = &sched{
 // the task queue is a priority queue that orders tasks by executing
 // time. The timer is the only time.Timer lives in runtime, it serves
 // the head task in the task queue.
-//
-// sched uses greedy scheduling algorithm that creates many goroutines
-// at the same time if and only if tasks need be executed at the same
-// time, otherwise there will be only one goroutine for executing
-// the task.
-//
-// Please note that there is still an optimization trick for sched,
-// the task queue is implemented via mutex, which makes the task queue
-// much slower than lock-free (spin lock with cas algorithm), therefore
-// future optimization could consider to implement a lock-free priority
-// queue for the timer task scheduling.
 type sched struct {
 	// running counts the tasks already starts that cannot be stopped.
 	running uint64 // atomic
@@ -166,11 +155,7 @@ func (s *sched) resume() {
 
 	// TODO: reuse goroutine here
 	go func() {
-		timer := s.getTimer()
-		if timer == nil {
-			return
-		}
-		<-timer.C
+		<-s.getTimer().C
 		s.worker()
 	}()
 }
@@ -203,7 +188,7 @@ func (s *sched) arrival(t *task) {
 func (s *sched) execute(t *task) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.future.write(
+			t.future.put(
 				fmt.Errorf(
 					"sched: task %s panic while executing, reason: %v",
 					t.value.GetID(), r))
@@ -226,7 +211,7 @@ func (s *sched) execute(t *task) {
 		result = fmt.Sprintf("sched: task %s success with nil return",
 			t.value.GetID())
 	}
-	t.future.write(result)
+	t.future.put(result)
 }
 
 // TaskQueue implements a timer queue based on a heap
@@ -342,7 +327,7 @@ func (f *future) Get() (v interface{}) {
 	return
 }
 
-func (f *future) write(v interface{}) {
+func (f *future) put(v interface{}) {
 	f.value.Store(v)
 }
 

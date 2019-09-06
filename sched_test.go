@@ -17,11 +17,6 @@ import (
 	"github.com/changkun/sched/tests"
 )
 
-// sleep to wait execution, a strict wait tolerance: 100 milliseconds
-func strictSleep(latest time.Time) {
-	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
-}
-
 func TestSchedInitFail(t *testing.T) {
 	_, err := Init("rdis://127.0.0.1:6323/123123")
 	if err == nil {
