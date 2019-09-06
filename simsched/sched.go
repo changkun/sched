@@ -1,4 +1,4 @@
-// Copyright 2018 Changkun Ou. All rights reserved.
+// Copyright 2019 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
@@ -42,18 +42,19 @@ func Stop() {
 	// pause sched0 fisrt.
 	Pause()
 
-	// wait until all started tasks (i.e. tasks is executing other than timing) stops
+	// wait until all started tasks (i.e. tasks is executing other than
+	// timing) stops
 	//
-	// note that the following busy wait satisfies sequential consistency
-	// memory model since the loop does not wait any value but only checkes
-	// sched0.running atomically.
+	// note that the following busy wait satisfies sequential
+	// consistency memory model since the loop does not wait any value
+	// but only checkes sched0.running atomically.
 	running := atomic.LoadUint64(&sched0.running)
 	for {
 		current := atomic.LoadUint64(&sched0.running)
 		if current < running {
 			running = current
 		}
-		// if running descreased to 0 then sched is actually can be terminated
+		// if running descreased to 0 then sched can be terminated
 		if running == 0 {
 			break
 		}
@@ -110,13 +111,14 @@ var sched0 = &sched{
 // sched is the actual scheduler for task scheduling
 //
 // sched implements greedy scheduling, with a timer and a task queue,
-// the task queue is a priority queue that orders tasks by its executing time.
-// the timer is the only time.Timer lives in runtime, it serves the head
-// task in the task queue.
+// the task queue is a priority queue that orders tasks by executing
+// time. The timer is the only time.Timer lives in runtime, it serves
+// the head task in the task queue.
 //
 // sched uses greedy scheduling algorithm that creates many goroutines
-// at the same time if and only if tasks need be executed at the same time,
-// otherwise there will be only one goroutine for executing the task.
+// at the same time if and only if tasks need be executed at the same
+// time, otherwise there will be only one goroutine for executing
+// the task.
 //
 // Moreover, there will be no goroutine if the task queue is empty,
 // which makes the approach better than immortal channel loop.
@@ -124,11 +126,10 @@ var sched0 = &sched{
 // Please note that there is still an optimization trick for sched,
 // the task queue is implemented via mutex, which makes the task queue
 // much slower than lock-free (spin lock with cas algorithm), therefore
-// future optimization could consider to implement a lock-free priority queue
-// for the timer task scheduling.
+// future optimization could consider to implement a lock-free priority
+// queue for the timer task scheduling.
 type sched struct {
-	// running counts the tasks already starts that cannot be stopped,
-	// for timing tasks that still waiting for execution, call sched.tasks.Len().
+	// running counts the tasks already starts that cannot be stopped.
 	running uint64 // atomic
 	// pausing is a sign that indicates if sched should stop running.
 	pausing uint64 // atomic
@@ -174,7 +175,8 @@ func (s *sched) setTimer(d time.Duration) {
 		}
 
 		// slow path: fail to stop, use a new timer.
-		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(d))) {
+		newT := unsafe.Pointer(time.NewTimer(d))
+		if atomic.CompareAndSwapPointer(&s.timer, old, newT) {
 			if old != nil {
 				(*time.Timer)(old).Stop()
 			}
@@ -187,12 +189,13 @@ func (s *sched) getTimer() *time.Timer {
 	return (*time.Timer)(atomic.LoadPointer(&s.timer))
 }
 
-// pause pauses sched timer, it does not concurrently pause tasks from running.
-// Thus, do NOT call this for complete pausing sched, call Pause() instead.
+// pause pauses sched timer, it does not concurrently pause tasks
+// from running. Thus, do NOT call this for complete pausing sched,
+// call Pause() instead.
 func (s *sched) pause() {
 	// fast path.
 	// this check is necessary, sometimes timer will become zero value.
-	if (*time.Timer)(atomic.LoadPointer(&s.timer)) == nil {
+	if atomic.LoadPointer(&s.timer) == nil {
 		return
 	}
 
@@ -265,7 +268,8 @@ func (s *sched) execute(t *task) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.future.write(
-				fmt.Errorf("sched: task %s panic while executing, reason: %v",
+				fmt.Errorf(
+					"sched: task %s panic while executing, reason: %v",
 					t.Value.GetID(), r))
 		}
 	}()
@@ -283,7 +287,8 @@ func (s *sched) execute(t *task) {
 	}
 	// avoid nil result
 	if result == nil {
-		result = fmt.Sprintf("sched: task %s success with nil return", t.Value.GetID())
+		result = fmt.Sprintf("sched: task %s success with nil return",
+			t.Value.GetID())
 	}
 	t.future.write(result)
 }
@@ -306,7 +311,8 @@ func (s *sched) execute(t *task) {
 // Worst case for "amortized" is O(n)
 //
 // Lock-free priority queue is possible. However, is it possible
-// to implement in pq with lookup? we cloud not find literature indication yet.
+// to implement in pq with lookup? we cloud not find literature
+// indication yet.
 type taskQueue struct {
 	heap   *taskHeap
 	lookup map[string]*task
@@ -402,7 +408,8 @@ func (m *taskQueue) update(t Task) (*future, bool) {
 type task struct {
 	Value Task // for storage
 
-	// The index is needed by update and is maintained by the heap.Interface methods.
+	// The index is needed by update and is maintained by the
+	// heap.Interface methods.
 	index    int       // The index of the item in the heap.
 	priority time.Time // type of time for priority
 	future   *future
