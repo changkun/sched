@@ -5,10 +5,10 @@
 package sched
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -35,27 +35,22 @@ func Stop() {
 	// pause sched0 fisrt.
 	Pause()
 
-	// wait until all started tasks (i.e. tasks is executing other than timing) stops
-	//
-	// note that the following busy wait satisfies sequential consistency
-	// memory model since the loop does not wait any value but only checkes
-	// sched0.running atomically.
-	running := atomic.LoadUint64(&sched0.running)
-	for {
-		current := atomic.LoadUint64(&sched0.running)
-		if current < running {
-			running = current
-		}
-		// if running descreased to 0 then sched is actually can be terminated
-		if running == 0 {
-			break
-		}
-		// use runtime.Gosched vacates CPU for other goroutines
-		// instead of spin loop
-		runtime.Gosched()
+	// wait until all started tasks (i.e. tasks is executing other than
+	// timing) stops
+	for atomic.LoadUint64(&sched0.running) > 0 {
 	}
 
+	// reset pausing indicator
+	atomic.AddUint64(&sched0.pausing, ^uint64(0))
+
 	sched0.cache.Close()
+}
+
+// Wait waits all tasks to be scheduled.
+func Wait() {
+	// With function call, no need for runtime.Gosched()
+	for sched0.tasks.length() != 0 {
+	}
 }
 
 // Submit given tasks
@@ -94,22 +89,6 @@ var sched0 *sched
 // the task queue is a priority queue that orders tasks by its executing time.
 // the timer is the only time.Timer lives in runtime, it serves the head
 // task in the task queue.
-//
-// sched uses greedy scheduling algorithm that creates many goroutines
-// at the same time if and only if tasks need be executed at the same time,
-// otherwise there will be only one goroutine for executing the task.
-//
-// Moreover, there will be no goroutine if the task queue is empty,
-// which makes the approach better than immortal channel loop.
-//
-// The performance, in sched, is always better than an immportal channel loop
-// since lock costs satisfy big lock (chan) > standard lock (mutex) > atomic (sched).
-//
-// Please note that there is still an optimization trick for sched,
-// the task queue is implemented via mutex, which makes the task queue
-// much slower than lock-free (spin lock with cas algorithm), therefore
-// future optimization could consider to implement a lock-free priority queue
-// for the timer task scheduling.
 type sched struct {
 	// running counts the tasks already starts that cannot be stopped,
 	// for timing tasks that still waiting for execution, call sched.tasks.Len().
@@ -118,6 +97,8 @@ type sched struct {
 	pausing uint64 // atomic
 	// timer is the only timer during the runtime
 	timer unsafe.Pointer // *time.Timer
+	// cancel cancels a timer if a timer need to reset
+	cancel atomic.Value // context.CancelFunc
 	// tasks is a TaskQueue that stores all unscheduled tasks in memory
 	tasks *taskQueue
 	// cache store
@@ -199,14 +180,18 @@ func (s *sched) schedule(t Task) TaskFuture {
 	return future
 }
 
-func (s *sched) setTimer(duration time.Duration) {
+func (s *sched) setTimer(d time.Duration) {
 	// spin lock
 	for {
+		// fast path: reuse the timer
 		old := atomic.LoadPointer(&s.timer)
-		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(duration))) {
-			if (*time.Timer)(old) != nil {
-				(*time.Timer)(old).Stop()
-			}
+		if (*time.Timer)(old).Stop() {
+			(*time.Timer)(old).Reset(d)
+			return
+		}
+
+		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(d))) {
+			(*time.Timer)(old).Stop()
 			return
 		}
 	}
@@ -219,22 +204,7 @@ func (s *sched) getTimer() *time.Timer {
 // pause pauses sched timer, it does not concurrently pause tasks from running.
 // Thus, do NOT call this for complete pausing sched, call Pause() instead.
 func (s *sched) pause() {
-	// fast path.
-	// this check is necessary, sometimes timer will become zero value.
-	if (*time.Timer)(atomic.LoadPointer(&s.timer)) == nil {
-		return
-	}
-
-	// spin lock
-	for {
-		old := atomic.LoadPointer(&s.timer)
-		if atomic.CompareAndSwapPointer(&s.timer, old, nil) {
-			if (*time.Timer)(old) != nil {
-				(*time.Timer)(old).Stop()
-			}
-			return
-		}
-	}
+	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
 }
 
 func (s *sched) ispausing() bool {
@@ -244,19 +214,30 @@ func (s *sched) ispausing() bool {
 func (s *sched) resume() {
 	t := s.tasks.peek()
 	if t == nil {
+		if x, ok := s.cancel.Load().(context.CancelFunc); ok {
+			x()
+		}
 		return
 	}
 	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
-	go s.timing()
+	ctx, cancel := context.WithCancel(context.Background())
+	if x, ok := s.cancel.Load().(context.CancelFunc); ok {
+		x()
+	}
+	s.cancel.Store(cancel)
+	go s.timing(ctx)
 }
 
-func (s *sched) timing() {
+func (s *sched) timing(ctx context.Context) {
 	timer := s.getTimer()
 	if timer == nil {
 		return
 	}
-	<-timer.C
-	s.worker()
+	select {
+	case <-timer.C:
+		s.worker()
+	case <-ctx.Done():
+	}
 }
 func (s *sched) worker() {
 	// fast path.
@@ -323,7 +304,7 @@ func (s *sched) reschedule(t *task, when time.Time) {
 func (s *sched) execute(t *task) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.future.write(fmt.Sprintf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
+			t.future.put(fmt.Errorf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
 		}
 	}()
 
@@ -342,7 +323,10 @@ func (s *sched) execute(t *task) {
 		s.reschedule(t, t.Value.GetRetryTime())
 		return
 	}
-	t.future.write(result)
+	if result == nil {
+		result = fmt.Sprintf("sched: task %s success with nil return.", t.Value.GetID())
+	}
+	t.future.put(result)
 	// NOTE: Generally this is not able to be fail.
 	// However it may caused by the lost of connection.
 	// Though task will be recovered when app restarts,
