@@ -20,6 +20,7 @@ func strictSleep(latest time.Time) {
 func TestSchedMasiveSchedule(t *testing.T) {
 	tests.O.Clear()
 	defer Stop()
+	defer Wait()
 
 	start := time.Now().UTC()
 	expectedOrder := []string{}
@@ -55,19 +56,26 @@ func TestSchedSubmit(t *testing.T) {
 		futures[i] = future
 	}
 	want := []string{
-		"task-0", "task-1", "task-2", "task-3", "task-4",
-		"task-0", "task-5", "task-1", "task-6", "task-2",
-		"task-7", "task-3", "task-8", "task-4", "task-0",
-		"task-9", "task-5", "task-1", "task-6", "task-2",
-		"task-7", "task-3", "task-8", "task-4", "task-9",
-		"task-5", "task-6", "task-7", "task-8", "task-9",
+		"task-0",
+		"task-1", "task-0",
+		"task-2", "task-1", "task-0",
+		"task-3", "task-1", "task-2",
+		"task-4", "task-3", "task-2",
+		"task-5", "task-3", "task-4",
+		"task-6", "task-5", "task-4",
+		"task-7", "task-6", "task-5",
+		"task-8", "task-7", "task-6",
+		"task-9", "task-8", "task-7",
+		"task-9", "task-8",
+		"task-9",
 	}
 	for i := range futures {
 		fmt.Printf("%v: %v\n", i, futures[i].Get())
 	}
 	if !reflect.DeepEqual(len(tests.O.Get()), len(want)) {
-		t.Errorf("submit retry task execution order is not as expected, want %d, got: %d", len(want), len(tests.O.Get()))
+		t.Errorf("submit retry task execution order is not as expected, want %v, got: %v", len(want), len(tests.O.Get()))
 	}
+	fmt.Printf("%v\n", tests.O.Get())
 }
 
 func TestSchedSchedule1(t *testing.T) {
@@ -177,8 +185,8 @@ func TestSchedError(t *testing.T) {
 		tasks: newTaskQueue(),
 	}
 	sched0.worker()
-	sched0.arrival(newTaskItem(&tests.Task{}))
-	sched0.execute(newTaskItem(&tests.Task{}))
+	sched0.arrival(newTaskItem(&tests.Task{}, time.Now()))
+	sched0.execute(newTaskItem(&tests.Task{}, time.Now()))
 	Pause()
 	sched0.worker()
 	Resume()
@@ -231,7 +239,7 @@ func BenchmarkSubmit(b *testing.B) {
 	// go tool pprof -http=:8080 cpu.prof
 	// go tool pprof -http=:8080 mem.prof
 	// go tool trace trace.out
-	for size := 1; size < 10; size += 100 {
+	for size := 10; size < 100; size += 100 {
 		println("size: ", size)
 		b.Run(fmt.Sprintf("#tasks-%d", size), func(b *testing.B) {
 			ts := newTasks(size)

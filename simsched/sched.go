@@ -18,12 +18,8 @@ import (
 type Task interface {
 	// GetID must returns a unique ID for all of the scheduled task.
 	GetID() (id string)
-	// SetID will set id as the unique ID for the scheduled task.
-	SetID(id string)
 	// GetExecution returns the time for task execution.
 	GetExecution() (execute time.Time)
-	// SetExecution sets a new time for the task execution
-	SetExecution(new time.Time) (old time.Time)
 	// GetRetryTime returns the retry time if a task was failed.
 	GetRetryTime() (execute time.Time)
 	// Execute executes the actual task, it can return a result,
@@ -39,7 +35,6 @@ type TaskFuture interface {
 // Stop stops runtime scheduler gracefully.
 // Note that the call should only be called then application terminates
 func Stop() {
-	// pause sched0 fisrt.
 	Pause()
 
 	// wait until all started tasks (i.e. tasks is executing other than
@@ -63,9 +58,7 @@ func Stop() {
 		runtime.Gosched()
 	}
 
-	if v := atomic.AddUint64(&sched0.pausing, ^uint64(0)); v != 0 {
-		panic(fmt.Sprintf("sched: stop is wrongly implemented: %v", v))
-	}
+	atomic.AddUint64(&sched0.pausing, ^uint64(0))
 }
 
 // Wait waits all tasks to be scheduled.
@@ -77,12 +70,12 @@ func Wait() {
 
 // Submit given tasks
 func Submit(t Task) TaskFuture {
-	return sched0.submit(t)
+	return sched0.schedule(t, t.GetExecution())
 }
 
 // Trigger given tasks immediately
 func Trigger(t Task) TaskFuture {
-	return sched0.trigger(t)
+	return sched0.schedule(t, time.Now().UTC())
 }
 
 // Pause stops the sched from running,
@@ -120,9 +113,6 @@ var sched0 = &sched{
 // time, otherwise there will be only one goroutine for executing
 // the task.
 //
-// Moreover, there will be no goroutine if the task queue is empty,
-// which makes the approach better than immortal channel loop.
-//
 // Please note that there is still an optimization trick for sched,
 // the task queue is implemented via mutex, which makes the task queue
 // much slower than lock-free (spin lock with cas algorithm), therefore
@@ -139,80 +129,55 @@ type sched struct {
 	tasks *taskQueue
 }
 
-// submit given tasks
-func (s *sched) submit(t Task) (future TaskFuture) {
-	future = s.schedule(t)
-	return
-}
-
-// trigger given tasks immediately
-func (s *sched) trigger(t Task) TaskFuture {
-	t.SetExecution(time.Now().UTC())
-	return s.submit(t)
-}
-
-func (s *sched) schedule(t Task) TaskFuture {
+func (s *sched) schedule(t Task, when time.Time) TaskFuture {
 	s.pause()
 
 	// if priority is able to be update
-	if future, ok := s.tasks.update(t); ok {
+	if future, ok := s.tasks.update(t, when); ok {
 		s.resume()
 		return future
 	}
 
-	future, _ := s.tasks.push(t)
+	future := s.tasks.push(newTaskItem(t, when))
 	s.resume()
 	return future
 }
 
-func (s *sched) setTimer(d time.Duration) {
-	for {
-		// fast path: reuse the timer
-		old := atomic.LoadPointer(&s.timer)
-		if old != nil && (*time.Timer)(old).Stop() {
-			(*time.Timer)(old).Reset(d)
-			return
-		}
-
-		// slow path: fail to stop, use a new timer.
-		newT := unsafe.Pointer(time.NewTimer(d))
-		if atomic.CompareAndSwapPointer(&s.timer, old, newT) {
-			if old != nil {
-				(*time.Timer)(old).Stop()
-			}
-			return
-		}
-	}
+func (s *sched) reschedule(t *task, when time.Time) {
+	s.pause()
+	t.priority = when
+	s.tasks.push(t)
+	s.resume()
 }
 
 func (s *sched) getTimer() *time.Timer {
 	return (*time.Timer)(atomic.LoadPointer(&s.timer))
 }
 
-// pause pauses sched timer, it does not concurrently pause tasks
-// from running. Thus, do NOT call this for complete pausing sched,
-// call Pause() instead.
-func (s *sched) pause() {
-	// fast path.
-	// this check is necessary, sometimes timer will become zero value.
-	if atomic.LoadPointer(&s.timer) == nil {
-		return
-	}
-
-	// spin lock
+func (s *sched) setTimer(d time.Duration) {
 	for {
+		// fast path: reuse the timer
 		old := atomic.LoadPointer(&s.timer)
-		if atomic.CompareAndSwapPointer(&s.timer, old, nil) {
-			if (*time.Timer)(old) != nil {
-				(*time.Timer)(old).Stop()
-			}
+		if (*time.Timer)(old).Stop() {
+			(*time.Timer)(old).Reset(d)
+			return
+		}
+
+		// slow path: fail to stop, use a new timer.
+		// this happens only if the sched is super busy.
+		if atomic.CompareAndSwapPointer(&s.timer, old,
+			unsafe.Pointer(time.NewTimer(d))) {
+			(*time.Timer)(old).Stop()
 			return
 		}
 	}
 }
 
-func (s *sched) ispausing() bool {
-	return atomic.LoadUint64(&s.pausing) > 0
+// pause pauses sched timer, it does not concurrently pause tasks
+// from running. Thus, do NOT call this for complete pausing sched,
+// call Pause() instead.
+func (s *sched) pause() {
+	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
 }
 
 func (s *sched) resume() {
@@ -221,6 +186,7 @@ func (s *sched) resume() {
 		return
 	}
 	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
+
 	// TODO: reuse goroutine here
 	go func() {
 		timer := s.getTimer()
@@ -235,7 +201,7 @@ func (s *sched) resume() {
 func (s *sched) worker() {
 	// fast path.
 	// if sched requires pausing, then stop executing and resume it.
-	if s.ispausing() {
+	if atomic.LoadUint64(&s.pausing) > 0 {
 		return
 	}
 
@@ -257,38 +223,31 @@ func (s *sched) arrival(t *task) {
 	atomic.AddUint64(&s.running, ^uint64(0)) // -1
 }
 
-func (s *sched) reschedule(t *task, when time.Time) {
-	t.Value.SetExecution(when)
-	s.pause()
-	s.tasks.pushBack(t)
-	s.resume()
-}
-
 func (s *sched) execute(t *task) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.future.write(
 				fmt.Errorf(
 					"sched: task %s panic while executing, reason: %v",
-					t.Value.GetID(), r))
+					t.value.GetID(), r))
 		}
 	}()
 
 	// for timer tollerance
-	if t.Value.GetExecution().After(time.Now().UTC()) {
+	if t.value.GetExecution().After(time.Now().UTC()) {
 		// reschedule task, we must save the task again by using s.Setup
-		s.reschedule(t, t.Value.GetExecution())
+		s.reschedule(t, t.value.GetExecution())
 		return
 	}
-	result, retry, err := t.Value.Execute()
+	result, retry, err := t.value.Execute()
 	if retry || err != nil {
-		s.reschedule(t, t.Value.GetRetryTime())
+		s.reschedule(t, t.value.GetRetryTime())
 		return
 	}
 	// avoid nil result
 	if result == nil {
 		result = fmt.Sprintf("sched: task %s success with nil return",
-			t.Value.GetID())
+			t.value.GetID())
 	}
 	t.future.write(result)
 }
@@ -297,22 +256,7 @@ func (s *sched) execute(t *task) {
 // Its supports bi-direction accessing, such as access value by key
 // or access key by its value
 //
-//                Time Complexity      Space Complexity
-//   New()              O(1)                 O(1)
-//   Len()              O(1)                 O(1)
-//   Push()   amortized O(log(n))            O(1)
-//   Pop()    amortized O(log(n))            O(1)
-//   Peek()   amortized O(log(n))            O(1)
-//   Update() amortized O(log(n))            O(1)
-//
-// Total space complexity: O(n + n) where n = queue.Len(), which is
-// a slice + a loopup hash table(map).
-//
-// Worst case for "amortized" is O(n)
-//
-// Lock-free priority queue is possible. However, is it possible
-// to implement in pq with lookup? we cloud not find literature
-// indication yet.
+// TODO: lock-free
 type taskQueue struct {
 	heap   *taskHeap
 	lookup map[string]*task
@@ -320,10 +264,8 @@ type taskQueue struct {
 }
 
 func newTaskQueue() *taskQueue {
-	pq := &taskHeap{}
-	heap.Init(pq)
 	return &taskQueue{
-		heap:   pq, // O(1) due to empty queue
+		heap:   &taskHeap{},
 		lookup: map[string]*task{},
 	}
 }
@@ -337,26 +279,18 @@ func (m *taskQueue) length() (l int) {
 }
 
 // push item
-func (m *taskQueue) push(t Task) (*future, bool) {
+func (m *taskQueue) push(t *task) *future {
 	m.mu.Lock()
 
-	old, ok := m.lookup[t.GetID()] // O(1) amortized
+	old, ok := m.lookup[t.value.GetID()] // O(1) amortized
 	if ok {
 		m.mu.Unlock()
-		return old.future, false
+		return old.future
 	}
-	item := newTaskItem(t)
-	heap.Push(m.heap, item)    // O(log(n))
-	m.lookup[t.GetID()] = item // O(1)
-	m.mu.Unlock()
-	return item.future, true
-}
-
-func (m *taskQueue) pushBack(t *task) {
-	m.mu.Lock()
 	heap.Push(m.heap, t)          // O(log(n))
-	m.lookup[t.Value.GetID()] = t // O(1)
+	m.lookup[t.value.GetID()] = t // O(1)
 	m.mu.Unlock()
+	return t.future
 }
 
 // Pop item
@@ -369,7 +303,7 @@ func (m *taskQueue) pop() *task {
 	}
 
 	item := heap.Pop(m.heap).(*task)     // O(log(n))
-	delete(m.lookup, item.Value.GetID()) // O(1) amortized
+	delete(m.lookup, item.value.GetID()) // O(1) amortized
 	m.mu.Unlock()
 	return item
 }
@@ -382,13 +316,13 @@ func (m *taskQueue) peek() (t Task) {
 		m.mu.Unlock()
 		return nil
 	}
-	t = (*m.heap)[0].Value
+	t = (*m.heap)[0].value
 	m.mu.Unlock()
 	return
 }
 
 // update of a given task
-func (m *taskQueue) update(t Task) (*future, bool) {
+func (m *taskQueue) update(t Task, when time.Time) (*future, bool) {
 	m.mu.Lock()
 
 	item, ok := m.lookup[t.GetID()]
@@ -397,8 +331,8 @@ func (m *taskQueue) update(t Task) (*future, bool) {
 		return nil, false
 	}
 
-	item.priority = t.GetExecution()
-	item.Value = t
+	item.priority = when
+	item.value = t
 	heap.Fix(m.heap, item.index) // O(log(n))
 	m.mu.Unlock()
 	return item.future, true
@@ -406,7 +340,7 @@ func (m *taskQueue) update(t Task) (*future, bool) {
 
 // a task is something we manage in a priority queue.
 type task struct {
-	Value Task // for storage
+	value Task // for storage
 
 	// The index is needed by update and is maintained by the
 	// heap.Interface methods.
@@ -416,10 +350,10 @@ type task struct {
 }
 
 // NewTaskItem creates a new queue item
-func newTaskItem(t Task) *task {
+func newTaskItem(t Task, when time.Time) *task {
 	return &task{
-		Value:    t,
-		priority: t.GetExecution(),
+		value:    t,
+		priority: when,
 		future:   &future{},
 	}
 }
