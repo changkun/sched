@@ -149,13 +149,6 @@ func TestSchedSchedule2(t *testing.T) {
 }
 
 func TestSchedPause(t *testing.T) {
-	ng := runtime.NumGoroutine()
-	defer func() {
-		if ng != runtime.NumGoroutine() {
-			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
-		}
-	}()
-
 	tests.O.Clear()
 	defer Stop()
 	defer Wait()
