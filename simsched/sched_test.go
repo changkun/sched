@@ -241,19 +241,20 @@ func BenchmarkSubmit(b *testing.B) {
 	// go tool trace trace.out
 	for size := 10; size < 100; size += 100 {
 		println("size: ", size)
-		b.Run(fmt.Sprintf("#tasks-%d", size), func(b *testing.B) {
-			ts := newTasks(size)
+		ss := size
+		b.Run(fmt.Sprintf("#tasks-%d", ss), func(b *testing.B) {
+			ts := newTasks(ss)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				// prepare problem size
 				b.StopTimer()
-				for j := 0; j < size-1; j++ {
+				for j := 0; j < ss-1; j++ {
 					Submit(ts[j])
 				}
 				b.StartTimer()
 
 				// enqueue under the problem size
-				Submit(ts[size-1])
+				Submit(ts[ss-1])
 				Wait()
 			}
 		})

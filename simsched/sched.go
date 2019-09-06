@@ -7,7 +7,6 @@ package simsched
 import (
 	"container/heap"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,32 +38,17 @@ func Stop() {
 
 	// wait until all started tasks (i.e. tasks is executing other than
 	// timing) stops
-	//
-	// note that the following busy wait satisfies sequential
-	// consistency memory model since the loop does not wait any value
-	// but only checkes sched0.running atomically.
-	running := atomic.LoadUint64(&sched0.running)
-	for {
-		current := atomic.LoadUint64(&sched0.running)
-		if current < running {
-			running = current
-		}
-		// if running descreased to 0 then sched can be terminated
-		if running == 0 {
-			break
-		}
-		// use runtime.Gosched vacates CPU for other goroutines
-		// instead of spin loop
-		runtime.Gosched()
+	for atomic.LoadUint64(&sched0.running) > 0 {
 	}
 
+	// reset pausing indicator
 	atomic.AddUint64(&sched0.pausing, ^uint64(0))
 }
 
 // Wait waits all tasks to be scheduled.
 func Wait() {
+	// With function call, no need for runtime.Gosched()
 	for sched0.tasks.length() != 0 {
-		runtime.Gosched()
 	}
 }
 
@@ -78,12 +62,7 @@ func Trigger(t Task) TaskFuture {
 	return sched0.schedule(t, time.Now().UTC())
 }
 
-// Pause stops the sched from running,
-// this is a pair call with Resume(), Pause() must be called first
-//
-// Pause() is the only way that completely pause sched from running.
-// the internal sched0.pause() is only used for internal scheduling,
-// which is not a real pause.
+// Pause stops the sched timing
 func Pause() {
 	atomic.AddUint64(&sched0.pausing, 1)
 	sched0.pause()
@@ -173,9 +152,7 @@ func (s *sched) setTimer(d time.Duration) {
 	}
 }
 
-// pause pauses sched timer, it does not concurrently pause tasks
-// from running. Thus, do NOT call this for complete pausing sched,
-// call Pause() instead.
+// pause pauses sched without pause tasks from running
 func (s *sched) pause() {
 	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
 }
@@ -324,7 +301,6 @@ func (m *taskQueue) peek() (t Task) {
 // update of a given task
 func (m *taskQueue) update(t Task, when time.Time) (*future, bool) {
 	m.mu.Lock()
-
 	item, ok := m.lookup[t.GetID()]
 	if !ok {
 		m.mu.Unlock()
@@ -351,11 +327,7 @@ type task struct {
 
 // NewTaskItem creates a new queue item
 func newTaskItem(t Task, when time.Time) *task {
-	return &task{
-		value:    t,
-		priority: when,
-		future:   &future{},
-	}
+	return &task{value: t, priority: when, future: &future{}}
 }
 
 type future struct {
@@ -365,12 +337,9 @@ type future struct {
 // Get implements TaskFuture interface
 func (f *future) Get() (v interface{}) {
 	// spin until value is stored in future.value
-	for {
-		if v = f.value.Load(); v != nil {
-			return
-		}
-		runtime.Gosched()
+	for ; v == nil; v = f.value.Load() {
 	}
+	return
 }
 
 func (f *future) write(v interface{}) {
