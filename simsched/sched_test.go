@@ -3,6 +3,7 @@ package simsched
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,12 +13,15 @@ import (
 	"github.com/changkun/sched/tests"
 )
 
-// sleep to wait execution, a strict wait tolerance: 100 milliseconds
-func strictSleep(latest time.Time) {
-	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
-}
-
 func TestSchedMasiveSchedule(t *testing.T) {
+
+	ng := runtime.NumGoroutine()
+	defer func() {
+		if ng != runtime.NumGoroutine() {
+			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+		}
+	}()
+
 	tests.O.Clear()
 	defer Stop()
 	defer Wait()
@@ -46,6 +50,14 @@ func TestSchedSubmit(t *testing.T) {
 	tests.O.Clear()
 	start := time.Now().UTC()
 	defer Stop()
+	ng := runtime.NumGoroutine()
+	defer func() {
+		if ng != runtime.NumGoroutine() {
+			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+		}
+	}()
+
+	defer Wait()
 
 	// save task into database
 	futures := make([]TaskFuture, 10)
@@ -137,8 +149,16 @@ func TestSchedSchedule2(t *testing.T) {
 }
 
 func TestSchedPause(t *testing.T) {
+	ng := runtime.NumGoroutine()
+	defer func() {
+		if ng != runtime.NumGoroutine() {
+			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+		}
+	}()
+
 	tests.O.Clear()
 	defer Stop()
+	defer Wait()
 
 	start := time.Now().UTC()
 	// task1 with 1 sec later
@@ -165,6 +185,14 @@ func TestSchedPause(t *testing.T) {
 }
 
 func TestSchedStop(t *testing.T) {
+	ng := runtime.NumGoroutine()
+	defer func() {
+		if ng != runtime.NumGoroutine() {
+			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+		}
+	}()
+	defer Wait()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	// task1 with 1 sec later
@@ -180,6 +208,14 @@ func TestSchedStop(t *testing.T) {
 }
 
 func TestSchedError(t *testing.T) {
+	ng := runtime.NumGoroutine()
+	defer func() {
+		if ng != runtime.NumGoroutine() {
+			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
+		}
+	}()
+	defer Wait()
+
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),

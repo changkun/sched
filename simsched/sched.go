@@ -6,6 +6,7 @@ package simsched
 
 import (
 	"container/heap"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -93,6 +94,8 @@ type sched struct {
 	pausing uint64 // atomic
 	// timer is the only timer during the runtime
 	timer unsafe.Pointer // *time.Timer
+	// cancel cancels a timer if a timer need to reset
+	cancel atomic.Value // context.CancelFunc
 	// tasks is a TaskQueue that stores all unscheduled tasks in memory
 	tasks *taskQueue
 }
@@ -152,12 +155,19 @@ func (s *sched) resume() {
 		return
 	}
 	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
+	ctx, cancel := context.WithCancel(context.Background())
+	if x, ok := s.cancel.Load().(context.CancelFunc); ok {
+		x()
+	}
+	s.cancel.Store(cancel)
 
-	// TODO: reuse goroutine here
-	go func() {
-		<-s.getTimer().C
-		s.worker()
-	}()
+	go func(ctx context.Context) {
+		select {
+		case <-s.getTimer().C:
+			s.worker()
+		case <-ctx.Done():
+		}
+	}(ctx)
 }
 
 func (s *sched) worker() {
@@ -243,12 +253,6 @@ func (m *taskQueue) length() (l int) {
 // push item
 func (m *taskQueue) push(t *task) *future {
 	m.mu.Lock()
-
-	old, ok := m.lookup[t.value.GetID()] // O(1) amortized
-	if ok {
-		m.mu.Unlock()
-		return old.future
-	}
 	heap.Push(m.heap, t)          // O(log(n))
 	m.lookup[t.value.GetID()] = t // O(1)
 	m.mu.Unlock()
