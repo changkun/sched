@@ -1,10 +1,11 @@
-// Copyright 2018 Changkun Ou. All rights reserved.
+// Copyright 2018-2019 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
 package sched
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/changkun/sched/leaktest"
 	"github.com/changkun/sched/tests"
 )
 
@@ -23,6 +25,10 @@ func strictSleep(latest time.Time) {
 }
 
 func TestSchedInitFail(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	_, err := Init("rdis://127.0.0.1:6323/123123")
 	if err == nil {
 		t.Fatal("Init with wrong format is sucess: ", err)
@@ -30,12 +36,9 @@ func TestSchedInitFail(t *testing.T) {
 }
 
 func TestSchedMasiveSchedule(t *testing.T) {
-	// ng := runtime.NumGoroutine()
-	// defer func() {
-	// 	if ng != runtime.NumGoroutine() {
-	// 		t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
-	// 	}
-	// }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
 
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
@@ -62,6 +65,10 @@ func TestSchedMasiveSchedule(t *testing.T) {
 }
 
 func TestSchedRecover(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	Init("redis://127.0.0.1:6379/2")
@@ -94,6 +101,10 @@ func TestSchedRecover(t *testing.T) {
 }
 
 func TestSchedSubmit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	Init("redis://127.0.0.1:6379/2")
@@ -127,6 +138,10 @@ func TestSchedSubmit(t *testing.T) {
 }
 
 func TestSchedSchedule1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	Init("redis://127.0.0.1:6379/2")
@@ -157,6 +172,10 @@ func TestSchedSchedule1(t *testing.T) {
 }
 
 func TestSchedSchedule2(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	Init("redis://127.0.0.1:6379/2")
@@ -204,6 +223,10 @@ func set(key string, postpone time.Duration, t Task) {
 }
 
 func TestSchedSchedule3(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	Init("redis://127.0.0.1:6379/2")
@@ -238,6 +261,10 @@ func TestSchedSchedule3(t *testing.T) {
 }
 
 func TestSchedPause(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
 	defer Stop()
@@ -267,6 +294,10 @@ func TestSchedPause(t *testing.T) {
 }
 
 func TestSchedStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
 	start := time.Now().UTC()
@@ -283,6 +314,10 @@ func TestSchedStop(t *testing.T) {
 }
 
 func TestSchedPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	Init("redis://127.0.0.1:6379/2")
 	defer Stop()
@@ -302,6 +337,10 @@ func TestSchedPanic(t *testing.T) {
 }
 
 func TestSchedRecoverFail(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	url := "redis://127.0.0.1:6379/2"
@@ -331,6 +370,10 @@ func TestSchedRecoverFail(t *testing.T) {
 }
 
 func TestSchedError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	Init("redis://127.0.0.1:6379/2")
 	sched0.cache.Close()
 	if _, err := sched0.recover(&tests.Task{}); err == nil {
@@ -382,6 +425,10 @@ func TestSchedError(t *testing.T) {
 }
 
 func TestSchedStop2(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),

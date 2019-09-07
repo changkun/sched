@@ -1,6 +1,11 @@
+// Copyright 2018-2019 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package simsched
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -10,17 +15,14 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/changkun/sched/leaktest"
 	"github.com/changkun/sched/tests"
 )
 
 func TestSchedMasiveSchedule(t *testing.T) {
-
-	ng := runtime.NumGoroutine()
-	defer func() {
-		if ng != runtime.NumGoroutine() {
-			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
 
 	tests.O.Clear()
 	defer Stop()
@@ -47,6 +49,10 @@ func TestSchedMasiveSchedule(t *testing.T) {
 }
 
 func TestSchedSubmit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	defer Stop()
@@ -91,6 +97,10 @@ func TestSchedSubmit(t *testing.T) {
 }
 
 func TestSchedSchedule1(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	defer Stop()
@@ -120,6 +130,10 @@ func TestSchedSchedule1(t *testing.T) {
 }
 
 func TestSchedSchedule2(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	start := time.Now().UTC()
 	defer Stop()
@@ -149,6 +163,10 @@ func TestSchedSchedule2(t *testing.T) {
 }
 
 func TestSchedPause(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	tests.O.Clear()
 	defer Stop()
 	defer Wait()
@@ -178,6 +196,10 @@ func TestSchedPause(t *testing.T) {
 }
 
 func TestSchedStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	ng := runtime.NumGoroutine()
 	defer func() {
 		if ng != runtime.NumGoroutine() {
@@ -201,12 +223,10 @@ func TestSchedStop(t *testing.T) {
 }
 
 func TestSchedError(t *testing.T) {
-	ng := runtime.NumGoroutine()
-	defer func() {
-		if ng != runtime.NumGoroutine() {
-			t.Fatalf("goroutine leak: %v:%v", ng, runtime.NumGoroutine())
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	defer Wait()
 
 	sched0 = &sched{
@@ -222,6 +242,10 @@ func TestSchedError(t *testing.T) {
 }
 
 func TestSchedStop2(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer leaktest.CheckContext(ctx, t)()
+
 	sched0 = &sched{
 		timer: unsafe.Pointer(time.NewTimer(0)),
 		tasks: newTaskQueue(),

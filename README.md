@@ -41,6 +41,9 @@ sched.Pause()
 // Resume sched
 sched.Resume()
 
+// Wait sched schedule all tasks
+sched.Wait()
+
 // Stop sched gracefully
 sched.Stop()
 ```

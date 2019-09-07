@@ -1,4 +1,4 @@
-// Copyright 2018 Changkun Ou. All rights reserved.
+// Copyright 2018-2019 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -37,18 +38,18 @@ func Stop() {
 	// wait until all started tasks (i.e. tasks is executing other than
 	// timing) stops
 	for atomic.LoadUint64(&sched0.running) > 0 {
+		runtime.Gosched()
 	}
 
 	// reset pausing indicator
 	atomic.AddUint64(&sched0.pausing, ^uint64(0))
-
 	sched0.cache.Close()
 }
 
 // Wait waits all tasks to be scheduled.
 func Wait() {
-	// With function call, no need for runtime.Gosched()
 	for sched0.tasks.length() != 0 {
+		runtime.Gosched()
 	}
 }
 
