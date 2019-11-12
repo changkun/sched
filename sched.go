@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -155,27 +156,46 @@ func (s *sched) setTimer(d time.Duration) {
 	// spin lock
 	for {
 		// fast path: reuse the timer
-		old := atomic.LoadPointer(&s.timer)
-		if (*time.Timer)(old).Stop() {
-			(*time.Timer)(old).Reset(d)
-			return
+		old := atomic.SwapPointer(&s.timer, nil)
+		if old != nil {
+			if (*time.Timer)(old).Stop() {
+				(*time.Timer)(old).Reset(d)
+				if atomic.CompareAndSwapPointer(&s.timer, nil, old) {
+					return
+				}
+				runtime.Gosched()
+				continue
+			}
 		}
 
 		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(d))) {
-			(*time.Timer)(old).Stop()
+			if old != nil {
+				(*time.Timer)(old).Stop()
+			}
 			return
 		}
+		runtime.Gosched()
 	}
 }
 
-func (s *sched) getTimer() *time.Timer {
-	return (*time.Timer)(atomic.LoadPointer(&s.timer))
+func (s *sched) getTimer() (t *time.Timer) {
+	for {
+		t = (*time.Timer)(atomic.LoadPointer(&s.timer))
+		if t != nil {
+			return
+		}
+		runtime.Gosched()
+	}
 }
 
 // pause pauses sched timer, it does not concurrently pause tasks from running.
 // Thus, do NOT call this for complete pausing sched, call Pause() instead.
 func (s *sched) pause() {
-	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
+	old := atomic.LoadPointer(&s.timer)
+	// if old is nil then there is someone who tries to stop the timer.
+	if old != nil {
+		(*time.Timer)(old).Stop()
+	}
 }
 
 func (s *sched) ispausing() bool {
@@ -335,6 +355,25 @@ func (s *sched) lock(t Task) (bool, error) {
 // unlock the given task explicitly
 func (s *sched) unlock(t Task) {
 	s.cache.Del(prefixLock + t.GetID())
+}
+
+func (s *sched) load(id string, t Task) (TaskFuture, error) {
+	r := &record{ID: id}
+	if err := r.read(); err != nil {
+		return nil, err
+	}
+
+	data, _ := json.Marshal(r.Data)
+
+	v := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
+	json.Unmarshal(data, &v)
+	if v == nil || reflect.ValueOf(v).Elem().IsZero() || !v.IsValidID() {
+		return nil, nil
+	}
+	v.SetID(id)
+	v.SetExecution(r.Execution)
+	future, _ := s.tasks.push(v)
+	return future, nil
 }
 
 // record of a schedule

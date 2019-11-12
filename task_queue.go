@@ -6,6 +6,7 @@ package sched
 
 import (
 	"container/heap"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,6 +147,7 @@ type future struct {
 func (f *future) Get() (v interface{}) {
 	// spin until value is stored in future.value
 	for ; v == nil; v = f.value.Load() {
+		runtime.Gosched()
 	}
 	return
 }

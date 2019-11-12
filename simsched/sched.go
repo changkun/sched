@@ -8,6 +8,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,9 +38,9 @@ type TaskFuture interface {
 func Stop() {
 	Pause()
 
-	// wait until all started tasks (i.e. tasks is executing other than
-	// timing) stops
+	// wait until all started tasks
 	for atomic.LoadUint64(&sched0.running) > 0 {
+		runtime.Gosched()
 	}
 
 	// reset pausing indicator
@@ -48,8 +49,9 @@ func Stop() {
 
 // Wait waits all tasks to be scheduled.
 func Wait() {
-	// With function call, no need for runtime.Gosched()
+	// With function call
 	for sched0.tasks.length() != 0 {
+		runtime.Gosched()
 	}
 }
 
@@ -60,7 +62,7 @@ func Submit(t Task) TaskFuture {
 
 // Trigger given tasks immediately
 func Trigger(t Task) TaskFuture {
-	return sched0.schedule(t, time.Now().UTC())
+	return sched0.schedule(t, time.Now())
 }
 
 // Pause stops the sched timing
@@ -121,45 +123,66 @@ func (s *sched) reschedule(t *task, when time.Time) {
 	s.resume()
 }
 
-func (s *sched) getTimer() *time.Timer {
-	return (*time.Timer)(atomic.LoadPointer(&s.timer))
+func (s *sched) getTimer() (t *time.Timer) {
+	for {
+		t = (*time.Timer)(atomic.LoadPointer(&s.timer))
+		if t != nil {
+			return
+		}
+		runtime.Gosched()
+	}
 }
 
 func (s *sched) setTimer(d time.Duration) {
 	for {
 		// fast path: reuse the timer
-		old := atomic.LoadPointer(&s.timer)
-		if (*time.Timer)(old).Stop() {
-			(*time.Timer)(old).Reset(d)
-			return
+		old := atomic.SwapPointer(&s.timer, nil)
+		if old != nil {
+			if (*time.Timer)(old).Stop() {
+				(*time.Timer)(old).Reset(d)
+				if atomic.CompareAndSwapPointer(&s.timer, nil, old) {
+					return
+				}
+				runtime.Gosched()
+				continue
+			}
 		}
 
 		// slow path: fail to stop, use a new timer.
 		// this happens only if the sched is super busy.
 		if atomic.CompareAndSwapPointer(&s.timer, old,
 			unsafe.Pointer(time.NewTimer(d))) {
-			(*time.Timer)(old).Stop()
+			if old != nil {
+				(*time.Timer)(old).Stop()
+			}
 			return
 		}
+		runtime.Gosched()
 	}
 }
 
 // pause pauses sched without pause tasks from running
 func (s *sched) pause() {
-	(*time.Timer)(atomic.LoadPointer(&s.timer)).Stop()
+	old := atomic.LoadPointer(&s.timer)
+	// if old is nil then there is someone who tries to stop the timer.
+	if old != nil {
+		(*time.Timer)(old).Stop()
+	}
 }
 
 func (s *sched) resume() {
-	t := s.tasks.peek()
-	if t == nil {
-		return
-	}
-	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
+	// Cancel as soon as possible, this must happens before setTimer
 	ctx, cancel := context.WithCancel(context.Background())
 	if x, ok := s.cancel.Load().(context.CancelFunc); ok {
 		x()
 	}
 	s.cancel.Store(cancel)
+
+	t := s.tasks.peek()
+	if t == nil {
+		return
+	}
+	s.setTimer(t.GetExecution().Sub(time.Now()))
 
 	go func(ctx context.Context) {
 		select {
@@ -206,7 +229,7 @@ func (s *sched) execute(t *task) {
 	}()
 
 	// for timer tollerance
-	if t.value.GetExecution().After(time.Now().UTC()) {
+	if t.value.GetExecution().After(time.Now()) {
 		// reschedule task, we must save the task again by using s.Setup
 		s.reschedule(t, t.value.GetExecution())
 		return
@@ -327,6 +350,7 @@ type future struct {
 func (f *future) Get() (v interface{}) {
 	// spin until value is stored in future.value
 	for ; v == nil; v = f.value.Load() {
+		runtime.Gosched()
 	}
 	return
 }
