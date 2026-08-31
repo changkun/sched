@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Changkun Ou. All rights reserved.
+// Copyright 2018 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
@@ -7,408 +7,403 @@ package sched
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
-	"runtime"
-	"strings"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
-// Init initialize task scheduler
-func Init(db string, all ...Task) ([]TaskFuture, error) {
-	c, err := newCache(db)
+// ErrNotInitialized is returned by Submit and Trigger before Init succeeded.
+var ErrNotInitialized = errors.New("sched: not initialized, call Init first")
+
+// sched0 is the scheduler the package-level API drives. Init installs it and
+// Stop removes it.
+var sched0 atomic.Pointer[sched]
+
+func current() *sched { return sched0.Load() }
+
+// Init connects sched to a Redis instance and restores the tasks that a
+// previous run left behind.
+//
+// url is a Redis connection string, for example
+// "redis://127.0.0.1:6379/0". Every argument in tasks is a prototype: an
+// empty value of a task type that sched must be able to recover. Init
+// returns one Future per recovered task.
+//
+// Calling Init again replaces the running scheduler.
+func Init(url string, tasks ...Task) ([]Future, error) {
+	s, err := newRedisStore(url)
 	if err != nil {
 		return nil, err
 	}
-	sched0 = &sched{
-		timer: unsafe.Pointer(time.NewTimer(0)),
-		tasks: newTaskQueue(),
-		cache: c,
+	return start(s, tasks...)
+}
+
+// start installs a scheduler on the given store. Init wraps it; tests use it
+// to inject a store.
+func start(st store, tasks ...Task) ([]Future, error) {
+	s := newSched(st)
+	if old := sched0.Swap(s); old != nil {
+		old.shutdown()
 	}
-	return sched0.recover(all...)
+	go s.run()
+	return s.restore(tasks...)
 }
 
-// Stop stops runtime scheduler gracefully.
-// Note that the call should only be called then application terminates
-func Stop() {
-	// pause sched0 fisrt.
-	Pause()
-
-	// wait until all started tasks (i.e. tasks is executing other than
-	// timing) stops
-	for atomic.LoadUint64(&sched0.running) > 0 {
-		runtime.Gosched()
+// Submit schedules t to run at t.Execution() and returns the Future of its
+// result. Submitting an identifier that is already scheduled does not
+// duplicate the task; it moves the existing one to the new execution time
+// and returns a Future that resolves with it.
+func Submit(t Task) (Future, error) {
+	s := current()
+	if s == nil {
+		return nil, ErrNotInitialized
 	}
-
-	// reset pausing indicator
-	atomic.AddUint64(&sched0.pausing, ^uint64(0))
-	sched0.cache.Close()
+	return s.submit(t)
 }
 
-// Wait waits all tasks to be scheduled.
-func Wait() {
-	for sched0.tasks.length() != 0 {
-		runtime.Gosched()
+// Trigger schedules t to run now and returns the Future of its result.
+func Trigger(t Task) (Future, error) {
+	s := current()
+	if s == nil {
+		return nil, ErrNotInitialized
 	}
-}
-
-// Submit given tasks
-func Submit(t Task) (TaskFuture, error) {
-	return sched0.submit(t)
-}
-
-// Trigger given tasks immediately
-func Trigger(t Task) (TaskFuture, error) {
-	return sched0.trigger(t)
-}
-
-// Pause stops the sched from running,
-// this is a pair call with Resume(), Pause() must be called first
-//
-// Pause() is the only way that completely pause sched from running.
-// the internal sched0.pause() is only used for internal scheduling,
-// which is not a real pause.
-func Pause() {
-	atomic.AddUint64(&sched0.pausing, 1)
-	sched0.pause()
-}
-
-// Resume resumes sched and start executing tasks
-// this is a pair call with Pause(), Resume() must be called second
-func Resume() {
-	atomic.AddUint64(&sched0.pausing, ^uint64(0)) // -1
-	sched0.resume()
-}
-
-var sched0 *sched
-
-// sched is the actual scheduler for task scheduling
-//
-// sched implements greedy scheduling, with a timer and a task queue,
-// the task queue is a priority queue that orders tasks by its executing time.
-// the timer is the only time.Timer lives in runtime, it serves the head
-// task in the task queue.
-type sched struct {
-	// running counts the tasks already starts that cannot be stopped,
-	// for timing tasks that still waiting for execution, call sched.tasks.Len().
-	running uint64 // atomic
-	// pausing is a sign that indicates if sched should stop running.
-	pausing uint64 // atomic
-	// timer is the only timer during the runtime
-	timer unsafe.Pointer // *time.Timer
-	// cancel cancels a timer if a timer need to reset
-	cancel atomic.Value // context.CancelFunc
-	// tasks is a TaskQueue that stores all unscheduled tasks in memory
-	tasks *taskQueue
-	// cache store
-	cache *cache
-}
-
-func (s *sched) recover(ts ...Task) (futures []TaskFuture, err error) {
-	ids, err := getRecords()
-	if err != nil {
-		return nil, err
-	}
-	for _, t := range ts {
-		for i := range ids {
-			future, err := s.load(ids[i], t)
-			if future != nil && err == nil {
-				futures = append(futures, future)
-			}
-		}
-	}
-	s.resume()
-	return
-}
-
-// submit given tasks
-func (s *sched) submit(t Task) (future TaskFuture, err error) {
-	// save asap
-	if err = save(t); err != nil {
-		return
-	}
-	future = s.schedule(t)
-	return
-}
-
-// trigger given tasks immediately
-func (s *sched) trigger(t Task) (TaskFuture, error) {
 	t.SetExecution(time.Now().UTC())
 	return s.submit(t)
 }
 
-func (s *sched) schedule(t Task) TaskFuture {
-	s.pause()
-	defer s.resume()
-
-	// if priority is able to be update
-	if future, ok := s.tasks.update(t); ok {
-		return future
-	}
-
-	future, _ := s.tasks.push(t)
-	return future
-}
-
-func (s *sched) setTimer(d time.Duration) {
-	// spin lock
-	for {
-		// fast path: reuse the timer
-		old := atomic.SwapPointer(&s.timer, nil)
-		if old != nil {
-			if (*time.Timer)(old).Stop() {
-				(*time.Timer)(old).Reset(d)
-				if atomic.CompareAndSwapPointer(&s.timer, nil, old) {
-					return
-				}
-				runtime.Gosched()
-				continue
-			}
-		}
-
-		if atomic.CompareAndSwapPointer(&s.timer, old, unsafe.Pointer(time.NewTimer(d))) {
-			if old != nil {
-				(*time.Timer)(old).Stop()
-			}
-			return
-		}
-		runtime.Gosched()
+// Pause stops sched from starting new tasks. Tasks that already run keep
+// running. Pause and Resume nest: Resume starts the scheduler again after as
+// many calls as Pause received.
+func Pause() {
+	if s := current(); s != nil {
+		s.pausing.Add(1)
+		s.wakeup()
 	}
 }
 
-func (s *sched) getTimer() (t *time.Timer) {
-	for {
-		t = (*time.Timer)(atomic.LoadPointer(&s.timer))
-		if t != nil {
-			return
-		}
-		runtime.Gosched()
+// Resume undoes one Pause.
+func Resume() {
+	if s := current(); s != nil {
+		s.pausing.Add(-1)
+		s.wakeup()
 	}
 }
 
-// pause pauses sched timer, it does not concurrently pause tasks from running.
-// Thus, do NOT call this for complete pausing sched, call Pause() instead.
-func (s *sched) pause() {
-	old := atomic.LoadPointer(&s.timer)
-	// if old is nil then there is someone who tries to stop the timer.
-	if old != nil {
-		(*time.Timer)(old).Stop()
+// Wait blocks until no task is queued and no task runs. It never returns
+// while the scheduler is paused with work outstanding.
+func Wait() {
+	if s := current(); s != nil {
+		s.await(func() bool { return s.outstanding() == 0 })
 	}
 }
 
-func (s *sched) ispausing() bool {
-	return atomic.LoadUint64(&s.pausing) > 0
+// Stop shuts the scheduler down after the tasks that already started have
+// finished, and closes the connection to the store. Queued tasks stay in the
+// store and come back on the next Init. Stop is safe to call more than once.
+func Stop() {
+	if s := current(); s != nil {
+		s.shutdown()
+		sched0.CompareAndSwap(s, nil)
+	}
 }
 
-func (s *sched) resume() {
-	t := s.tasks.peek()
-	if t == nil {
-		if x, ok := s.cancel.Load().(context.CancelFunc); ok {
-			x()
-		}
-		return
-	}
-	s.setTimer(t.GetExecution().Sub(time.Now().UTC()))
-	ctx, cancel := context.WithCancel(context.Background())
-	if x, ok := s.cancel.Load().(context.CancelFunc); ok {
-		x()
-	}
-	s.cancel.Store(cancel)
-	go s.timing(ctx)
+// sched schedules tasks with a single timer and a single priority queue.
+//
+// One goroutine, run, owns the queue and the timer. Everything else reaches
+// it through intake, a wait-free multi-producer queue, and wakeup, a
+// non-blocking signal. No goroutine ever waits for a lock to schedule a
+// task: Submit, Trigger, Pause and Resume all finish in a bounded number of
+// atomic steps.
+type sched struct {
+	// pausing counts unmatched Pause calls.
+	pausing atomic.Int64
+	// pending counts entries handed to intake that run has not absorbed.
+	// queued counts entries in the priority queue, running counts tasks
+	// that execute. pending + queued + running is the work outstanding;
+	// the transfers between them always raise the destination before they
+	// lower the source, so an observer never sees a spurious zero.
+	pending atomic.Int64
+	queued  atomic.Int64
+	running atomic.Int64
+	stopped atomic.Bool
+
+	intake   *intake
+	tasks    *queue // owned by run
+	store    store
+	progress *broadcast
+
+	wake chan struct{} // capacity 1, signals run
+	quit chan struct{} // closed to end run
+	done chan struct{} // closed when run returned
 }
 
-func (s *sched) timing(ctx context.Context) {
-	timer := s.getTimer()
-	if timer == nil {
-		return
+func newSched(st store) *sched {
+	return &sched{
+		intake:   newIntake(),
+		tasks:    newQueue(),
+		store:    st,
+		progress: newBroadcast(),
+		wake:     make(chan struct{}, 1),
+		quit:     make(chan struct{}),
+		done:     make(chan struct{}),
 	}
+}
+
+// wakeup asks run to look at the queue again. It never blocks: a signal that
+// is already waiting is as good as a second one.
+func (s *sched) wakeup() {
 	select {
-	case <-timer.C:
-		s.worker()
-	case <-ctx.Done():
+	case s.wake <- struct{}{}:
+	default:
 	}
 }
-func (s *sched) worker() {
-	// fast path.
-	// if sched requires pausing, then stop executing and resume it.
-	if s.ispausing() {
-		return
-	}
 
-	// medium path.
-	// stop execution if task queue is empty
-	task := s.tasks.pop()
-	if task == nil {
-		return
-	}
+func (s *sched) paused() bool { return s.pausing.Load() > 0 }
 
-	s.resume()
-	s.arrival(task)
+func (s *sched) outstanding() int64 {
+	return s.pending.Load() + s.queued.Load() + s.running.Load()
 }
 
-func (s *sched) arrival(t *task) {
-	// record running tasks
-	// note that this must be placed in arrival because
-	// s.cache may be early closed and then unlock will fail to delete lock.
-	atomic.AddUint64(&s.running, 1)
-	defer atomic.AddUint64(&s.running, ^uint64(0)) // -1
+// await blocks until cond holds or the scheduler stops.
+func (s *sched) await(cond func() bool) {
+	for !cond() {
+		// Take the channel before the second check, so a signal that
+		// arrives in between closes the channel we then wait on.
+		changed := s.progress.wait()
+		if cond() {
+			return
+		}
+		select {
+		case <-changed:
+		case <-s.done:
+			return
+		}
+	}
+}
 
-	ok, err := s.lock(t.Value)
+// run is the scheduler loop. It is the only goroutine that touches s.tasks.
+func (s *sched) run() {
+	defer close(s.done)
+
+	// Go 1.23 and later give timers an unbuffered channel: after Stop or
+	// Reset no stale value can arrive, so the loop never drains timer.C.
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+
+	for {
+		for {
+			e, ok := s.intake.pop()
+			if !ok {
+				break
+			}
+			s.absorb(e)
+		}
+
+		var fire <-chan time.Time
+		if !s.paused() {
+			now := time.Now().UTC()
+			for {
+				head := s.tasks.peek()
+				if head == nil || head.when.After(now) {
+					break
+				}
+				s.dispatch(s.tasks.pop())
+			}
+			if head := s.tasks.peek(); head != nil {
+				timer.Reset(head.when.Sub(now))
+				fire = timer.C
+			}
+		}
+
+		select {
+		case <-fire:
+		case <-s.wake:
+		case <-s.quit:
+			return
+		}
+		if fire != nil {
+			timer.Stop()
+		}
+	}
+}
+
+// absorb moves one submitted entry into the queue. A task that is already
+// queued keeps its place in the queue and collects the new Future.
+func (s *sched) absorb(e *entry) {
+	if old := s.tasks.find(e.task.ID()); old != nil {
+		old.futures = append(old.futures, e.futures...)
+		old.task = e.task
+		s.tasks.update(old, e.when)
+		s.pending.Add(-1)
+		s.progress.fire()
+		return
+	}
+	s.queued.Add(1)
+	s.tasks.push(e)
+	s.pending.Add(-1)
+	s.progress.fire()
+}
+
+// dispatch hands a due entry to its own goroutine, so that a slow task never
+// delays the scheduler loop.
+func (s *sched) dispatch(e *entry) {
+	s.running.Add(1)
+	s.queued.Add(-1)
+	go s.arrive(e)
+}
+
+// arrive takes the distributed lock of the task and runs it. If another
+// replica holds the lock, this replica drops the task.
+func (s *sched) arrive(e *entry) {
+	defer func() {
+		s.running.Add(-1)
+		s.progress.fire()
+	}()
+
+	ctx := context.Background()
+	ok, err := s.store.SetNX(ctx, prefixLock+e.task.ID(), "locked", e.task.Timeout())
 	if err != nil || !ok {
 		return
 	}
-
-	s.execute(t)
-	// no need to hadle unlock fail since there is a timeout on cache
-	// note that we must guarantee the task will never be arrival if the lock is not released.
-	// refer to the s.running in above.
-	s.unlock(t.Value)
+	s.execute(ctx, e)
+	// The lock also expires on its own, so a failure to release it delays
+	// the next run at worst.
+	_ = s.store.Del(ctx, prefixLock+e.task.ID())
 }
 
-func (s *sched) verify(t Task) (*time.Time, error) {
-	r := &record{ID: t.GetID()}
-	if err := r.read(); err != nil {
-		return nil, err
-	}
-	taskTime := t.GetExecution()
-	if taskTime.Before(r.Execution) {
-		return &r.Execution, nil
-	}
-	return &taskTime, nil
-}
-
-func (s *sched) reschedule(t *task, when time.Time) {
-	t.Value.SetExecution(when)
-	// If save() is fail because of cache failure,
-	// directly schedule the task without any hesitate
-	// In case it may leads a problem of unabiding task
-	// scheduling
-	save(t.Value)
-
-	s.pause()
-	s.tasks.pushBack(t)
-	s.resume()
-}
-
-func (s *sched) execute(t *task) {
+// execute runs the task and publishes its result.
+func (s *sched) execute(ctx context.Context, e *entry) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.future.put(fmt.Errorf("sched: task %s panic while executing, reason: %v", t.Value.GetID(), r))
+			e.put(fmt.Errorf("sched: task %s panicked: %v", e.task.ID(), r))
 		}
 	}()
 
-	execution, err := s.verify(t.Value)
+	// Another replica may have moved the task since this one queued it.
+	// The store holds the truth, and the later of the two times wins.
+	r, err := readRecord(ctx, s.store, e.task.ID())
 	if err != nil {
 		return
 	}
-	// for timer tollerance
+	execution := e.task.Execution()
+	if execution.Before(r.Execution) {
+		execution = r.Execution
+	}
 	if execution.After(time.Now().UTC()) {
-		// reschedule task, we must save the task again by using s.Setup
-		s.reschedule(t, *execution)
+		s.reschedule(ctx, e, execution)
 		return
 	}
-	result, retry, err := t.Value.Execute()
+
+	result, retry, err := e.task.Execute()
 	if retry || err != nil {
-		s.reschedule(t, t.Value.GetRetryTime())
+		s.reschedule(ctx, e, e.task.RetryTime())
 		return
 	}
 	if result == nil {
-		result = fmt.Sprintf("sched: task %s success with nil return.", t.Value.GetID())
+		result = fmt.Sprintf("sched: task %s returned no result", e.task.ID())
 	}
-	t.future.put(result)
-	// NOTE: Generally this is not able to be fail.
-	// However it may caused by the lost of connection.
-	// Though task will be recovered when app restarts,
-	// but it may leads an inconsistency, we need other
-	// means to solve this problem
-	s.del(t.Value)
+	e.put(result)
+	// A failure here leaves a task that the next Init recovers and runs a
+	// second time. The task itself has to tolerate that.
+	_ = s.store.Del(ctx, prefixTask+e.task.ID())
 }
 
-// sched prefix for records
-const (
-	prefixTask = "sched:task:"
-	prefixLock = "sched:lock:"
-)
-
-// save record into data store
-func save(t Task) error {
-	r := &record{
-		ID:        t.GetID(),
-		Execution: t.GetExecution(),
-		Data:      t,
-	}
-	return r.save()
+// reschedule puts a task back into the queue at a new time. It raises
+// pending before arrive lowers running, so the work stays visible to Wait.
+func (s *sched) reschedule(ctx context.Context, e *entry, when time.Time) {
+	e.task.SetExecution(when)
+	e.when = when
+	// Schedule even if the store rejects the write: dropping the task
+	// would be worse than running it without a durable record.
+	_ = saveTask(ctx, s.store, e.task)
+	s.pending.Add(1)
+	s.intake.push(e)
+	s.wakeup()
 }
 
-// del deletes record by id
-func (s *sched) del(t Task) {
-	s.cache.Del(prefixTask + t.GetID())
-}
-
-// lock the given task
-func (s *sched) lock(t Task) (bool, error) {
-	return s.cache.SetNX(prefixLock+t.GetID(), "locking", t.GetTimeout())
-}
-
-// unlock the given task explicitly
-func (s *sched) unlock(t Task) {
-	s.cache.Del(prefixLock + t.GetID())
-}
-
-func (s *sched) load(id string, t Task) (TaskFuture, error) {
-	r := &record{ID: id}
-	if err := r.read(); err != nil {
+// submit persists the task and hands it to the scheduler loop.
+func (s *sched) submit(t Task) (Future, error) {
+	if err := saveTask(context.Background(), s.store, t); err != nil {
 		return nil, err
 	}
+	f := newFuture()
+	s.pending.Add(1)
+	s.intake.push(&entry{task: t, when: t.Execution(), futures: []*future{f}})
+	s.wakeup()
+	return f, nil
+}
 
-	data, _ := json.Marshal(r.Data)
+// shutdown pauses the scheduler, waits for the running tasks, ends the loop
+// and closes the store.
+func (s *sched) shutdown() {
+	if !s.stopped.CompareAndSwap(false, true) {
+		<-s.done
+		return
+	}
+	s.pausing.Add(1)
+	s.wakeup()
+	s.await(func() bool { return s.running.Load() == 0 })
+	s.pausing.Add(-1)
+	close(s.quit)
+	<-s.done
+	_ = s.store.Close()
+}
 
-	v := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-	json.Unmarshal(data, &v)
-	if v == nil || reflect.ValueOf(v).Elem().IsZero() || !v.IsValidID() {
-		return nil, nil
+// restore reads the persisted tasks and queues them again. Every argument is
+// a prototype: an empty value of a task type, used to rebuild the concrete
+// type that json cannot infer.
+func (s *sched) restore(prototypes ...Task) ([]Future, error) {
+	ids, err := taskIDs(context.Background(), s.store)
+	if err != nil {
+		return nil, err
+	}
+	var futures []Future
+	for _, p := range prototypes {
+		for _, id := range ids {
+			if f := s.load(id, p); f != nil {
+				futures = append(futures, f)
+			}
+		}
+	}
+	return futures, nil
+}
+
+// load rebuilds one persisted task with the type of the prototype. It
+// returns nil if the record does not belong to that type.
+func (s *sched) load(id string, prototype Task) Future {
+	t := reflect.TypeOf(prototype)
+	if t == nil || t.Kind() != reflect.Pointer {
+		return nil
+	}
+	r, err := readRecord(context.Background(), s.store, id)
+	if err != nil {
+		return nil
+	}
+	data, err := json.Marshal(r.Data)
+	if err != nil {
+		return nil
+	}
+	v, ok := reflect.New(t.Elem()).Interface().(Task)
+	if !ok {
+		return nil
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return nil
+	}
+	// A record of a different task type leaves every exported field at
+	// its zero value; such a task cannot be restored and is skipped.
+	if reflect.ValueOf(v).Elem().IsZero() {
+		return nil
 	}
 	v.SetID(id)
 	v.SetExecution(r.Execution)
-	future, _ := s.tasks.push(v)
-	return future, nil
-}
 
-// record of a schedule
-type record struct {
-	ID        string      `json:"id"`
-	Execution time.Time   `json:"execution"`
-	Data      interface{} `json:"data"`
-}
-
-// getRecords all records keys
-func getRecords() (keys []string, err error) {
-	keys, err = sched0.cache.Keys(prefixTask)
-	ids := []string{}
-	for _, key := range keys {
-		ids = append(ids, strings.TrimPrefix(key, prefixTask))
-	}
-	return ids, err
-}
-
-// Read record with specified ID
-func (r *record) read() (err error) {
-	reply, err := sched0.cache.Get(prefixTask + r.ID)
-	if err != nil {
-		return
-	}
-	err = json.Unmarshal([]byte(reply), r)
-	return
-}
-
-// Save record into data store
-func (r *record) save() (err error) {
-	data, err := json.Marshal(r)
-	if err != nil {
-		return
-	}
-	err = sched0.cache.Set(prefixTask+r.ID, string(data))
-	return
+	f := newFuture()
+	s.pending.Add(1)
+	s.intake.push(&entry{task: v, when: r.Execution, futures: []*future{f}})
+	s.wakeup()
+	return f
 }

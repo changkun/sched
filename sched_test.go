@@ -1,418 +1,524 @@
-// Copyright 2018-2019 Changkun Ou. All rights reserved.
+// Copyright 2018 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
 package sched
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
-	"unsafe"
 
-	"github.com/changkun/sched/tests"
+	"github.com/alicebob/miniredis/v2"
 )
 
-// sleep to wait execution, a strict wait tolerance: 100 milliseconds
-func strictSleep(latest time.Time) {
-	time.Sleep(latest.Sub(time.Now().UTC()) + time.Millisecond*100)
+// newServer starts an in-process Redis and returns its URL.
+func newServer(t *testing.T) (*miniredis.Miniredis, string) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	return mr, "redis://" + mr.Addr() + "/0"
 }
 
-func TestSchedInitFail(t *testing.T) {
-	_, err := Init("rdis://127.0.0.1:6323/123123")
-	if err == nil {
-		t.Fatal("Init with wrong format is sucess: ", err)
+// setup starts a scheduler on a fresh in-process Redis.
+func setup(t *testing.T, prototypes ...Task) *miniredis.Miniredis {
+	t.Helper()
+	o.clear()
+	mr, url := newServer(t)
+	if _, err := Init(url, prototypes...); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(Stop)
+	return mr
+}
+
+func wantOrder(t *testing.T, want []string) {
+	t.Helper()
+	if got := o.get(); !slices.Equal(got, want) {
+		t.Fatalf("execution order = %v, want %v", got, want)
 	}
 }
 
-func TestSchedMasiveSchedule(t *testing.T) {
-	tests.O.Clear()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
+func TestInitBadURL(t *testing.T) {
+	if _, err := Init("rdis://127.0.0.1:6323/123123"); err == nil {
+		t.Fatal("Init with an invalid URL must fail")
+	}
+}
+
+func TestUninitialized(t *testing.T) {
+	Stop() // drop any scheduler a previous test left behind
+	sched0.Store(nil)
+
+	if _, err := Submit(newTask("x", time.Now())); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Submit before Init = %v, want ErrNotInitialized", err)
+	}
+	if _, err := Trigger(newTask("x", time.Now())); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Trigger before Init = %v, want ErrNotInitialized", err)
+	}
+	// These must not panic without a scheduler.
+	Pause()
+	Resume()
+	Wait()
+	Stop()
+}
+
+func TestScheduleOrder(t *testing.T) {
+	setup(t)
 
 	start := time.Now().UTC()
-	expectedOrder := []string{}
-
-	futures := make([]TaskFuture, 20)
-	for i := 0; i < 20; i++ {
-		key := fmt.Sprintf("task-%d", i)
-		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
-		expectedOrder = append(expectedOrder, key)
-		future, _ := Submit(task)
-		futures[i] = future
-	}
+	futures := make([]Future, 20)
+	want := make([]string, 20)
 	for i := range futures {
-		fmt.Println(futures[i].Get())
+		id := fmt.Sprintf("task-%d", i)
+		want[i] = id
+		f, err := Submit(newTask(id, start.Add(time.Duration(i)*20*time.Millisecond)))
+		if err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		futures[i] = f
 	}
-	if !reflect.DeepEqual(expectedOrder, tests.O.Get()) {
-		t.Errorf("execution order wrong, got: %v", tests.O.Get())
+	for _, f := range futures {
+		if _, ok := f.Get().(string); !ok {
+			t.Fatalf("future value = %v, want a string", f.Get())
+		}
 	}
-
+	wantOrder(t, want)
 }
 
-func TestSchedRecover(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
+func TestScheduleReverseOrder(t *testing.T) {
+	setup(t)
 
-	// save task into database
-	want := []string{}
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("task-%d", i)
-		task := tests.NewTask(key, start.Add(time.Millisecond*10*time.Duration(i)))
-		want = append(want, key)
-		if err := save(task); err != nil {
-			t.Errorf("store with task-unique-id error: %v\n", err)
+	start := time.Now().UTC().Add(200 * time.Millisecond)
+	var futures []Future
+	var want []string
+	// Submit in reverse, so the queue has to reorder every insertion.
+	for i := 9; i >= 0; i-- {
+		id := fmt.Sprintf("task-%d", i)
+		f, err := Submit(newTask(id, start.Add(time.Duration(i)*30*time.Millisecond)))
+		if err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		futures = append(futures, f)
+	}
+	for i := range 10 {
+		want = append(want, fmt.Sprintf("task-%d", i))
+	}
+	for _, f := range futures {
+		f.Get()
+	}
+	wantOrder(t, want)
+}
+
+func TestSubmitTwiceShares(t *testing.T) {
+	setup(t)
+
+	start := time.Now().UTC()
+	first, err := Submit(newTask("dup", start.Add(500*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	// The same identifier at an earlier time moves the queued task and
+	// resolves both futures.
+	second, err := Submit(newTask("dup", start.Add(50*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if got, want := first.Get(), second.Get(); got != want {
+		t.Fatalf("futures differ: %v vs %v", got, want)
+	}
+	wantOrder(t, []string{"dup"})
+}
+
+func TestTriggerRunsNow(t *testing.T) {
+	setup(t)
+
+	f, err := Trigger(newTask("now", time.Now().UTC().Add(time.Hour)))
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	select {
+	case <-f.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Trigger did not run the task immediately")
+	}
+	wantOrder(t, []string{"now"})
+}
+
+func TestConcurrentSubmitAndTrigger(t *testing.T) {
+	setup(t)
+
+	start := time.Now().UTC()
+	if _, err := Submit(newTask("task-1", start.Add(300*time.Millisecond))); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		f, err := Submit(newTask("task-2", start.Add(600*time.Millisecond)))
+		if err != nil {
+			t.Error(err)
 			return
 		}
-	}
-
-	// recover back
-	futures, err := sched0.recover(&tests.Task{})
-	if err != nil {
-		t.Errorf("recover task with task-unique-id error: %v\n", err)
-		return
-	}
-	for i := range futures {
-		fmt.Println(futures[i].Get())
-	}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedSubmit(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	// save task into database
-	futures := make([]TaskFuture, 10)
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("task-%d", i)
-		task := tests.NewRetryTask(key, start.Add(time.Millisecond*100*time.Duration(i)), 2)
-		future, err := Submit(task)
+		f.Get()
+	}()
+	go func() {
+		defer wg.Done()
+		f, err := Trigger(newTask("task-1", start))
 		if err != nil {
-			t.Fatalf("submit task failed: task %+v, err: %+v", task, err)
+			t.Error(err)
+			return
 		}
-		futures[i] = future
-	}
-	want := []string{
-		"task-0", "task-1", "task-2", "task-3", "task-4",
-		"task-0", "task-5", "task-1", "task-6", "task-2",
-		"task-7", "task-3", "task-8", "task-4", "task-0",
-		"task-9", "task-5", "task-1", "task-6", "task-2",
-		"task-7", "task-3", "task-8", "task-4", "task-9",
-		"task-5", "task-6", "task-7", "task-8", "task-9",
-	}
-	for i := range futures {
-		fmt.Printf("%v: %v\n", i, futures[i].Get())
-	}
-	if !reflect.DeepEqual(len(tests.O.Get()), len(want)) {
-		t.Errorf("submit retry task execution order is not as expected, want %d, got: %d", len(want), len(tests.O.Get()))
-	}
-}
-
-func TestSchedSchedule1(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	task1 := tests.NewTask("task-1", start.Add(time.Millisecond*100))
-	Submit(task1)
-	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
-	taskAreplica := tests.NewTask("task-1", start.Add(time.Millisecond*10))
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func(t Task) {
-		future, _ := Submit(t)
-		future.Get()
-		wg.Done()
-	}(task2)
-	go func(t Task) {
-		future, _ := Trigger(t)
-		future.Get()
-		wg.Done()
-	}(taskAreplica)
-	wg.Wait()
-	want := []string{"task-1", "task-2"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedSchedule2(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	task1 := tests.NewTask("task-1", start.Add(time.Millisecond*100))
-	Submit(task1)
-	task2 := tests.NewTask("task-2", start.Add(time.Millisecond*30))
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func(t Task) {
-		future, _ := Submit(t)
-		future.Get()
-		wg.Done()
-	}(task2)
-	go func(t Task) {
-		future, _ := Trigger(t)
-		future.Get()
-		wg.Done()
-	}(task1)
-	wg.Wait()
-
-	want := []string{"task-1", "task-2"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("launch task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func set(key string, postpone time.Duration, t Task) {
-	result, _ := sched0.cache.Get(prefixTask + key)
-	r := &record{}
-	json.Unmarshal([]byte(result), r)
-	d, _ := json.Marshal(r.Data)
-	temp := reflect.New(reflect.ValueOf(t).Elem().Type()).Interface().(Task)
-	json.Unmarshal(d, &temp)
-	temp.SetID(key)
-	temp.SetExecution(r.Execution.Add(postpone))
-	data, _ := json.Marshal(&record{
-		ID:        temp.GetID(),
-		Execution: temp.GetExecution(),
-		Data:      temp,
-	})
-	sched0.cache.Set(prefixTask+temp.GetID(), string(data))
-}
-
-func TestSchedSchedule3(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	// task1 with 1 sec later
-	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	future, err := Submit(task1)
-	if err != nil {
-		t.FailNow()
-	}
-
-	// somehow override database time to 2 sec, the actual execution should be later
-	set("task-1", time.Second*2, &tests.Task{})
-
-	// sleep 1 sec
-	strictSleep(start.Add(time.Second))
-
-	// no execution at the moment
-	want := []string{}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task before execution is not as expected, got: %v", tests.O.Get())
-	}
-
-	fmt.Println(future.Get())
-
-	// should have executed
-	want = []string{"task-1"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedPause(t *testing.T) {
-	tests.O.Clear()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	start := time.Now().UTC()
-	// task1 with 1 sec later
-	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	future, _ := Submit(task1)
-
-	// pause sched and sleep 1 sec, task1 should not be executed
-	Pause()
-	time.Sleep(time.Second * 2)
-	want := []string{}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
-	}
-
-	// at this moment, task-1 should be executed asap
-	// should have executed
-	Resume()
-
-	fmt.Println(future.Get())
-	want = []string{"task-1"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedStop(t *testing.T) {
-	tests.O.Clear()
-	Init("redis://127.0.0.1:6379/2")
-	start := time.Now().UTC()
-	// task1 with 1 sec later
-	task1 := tests.NewTask("task-1", start.Add(time.Second))
-	future, _ := Submit(task1)
-	time.Sleep(time.Second + 500*time.Millisecond)
-	Stop()
-	fmt.Println(future.Get())
-	want := []string{"task-1"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedPanic(t *testing.T) {
-	tests.O.Clear()
-	Init("redis://127.0.0.1:6379/2")
-	defer Stop()
-
-	start := time.Now().UTC()
-	// task1 with 1 sec later
-	task1 := tests.NewPanicTask("task-1", start.Add(time.Second))
-	future, _ := Submit(task1)
-	time.Sleep(time.Second + 100*time.Millisecond)
-	sched0.cache.Del(prefixTask + "task-1")
-	Stop()
-	fmt.Println(future.Get())
-	want := []string{"task-1"}
-	if !reflect.DeepEqual(tests.O.Get(), want) {
-		t.Errorf("submit task execution order is not as expected, got: %v", tests.O.Get())
-	}
-}
-
-func TestSchedRecoverFail(t *testing.T) {
-	tests.O.Clear()
-	start := time.Now().UTC()
-	url := "redis://127.0.0.1:6379/2"
-	Init(url)
-	task := tests.NewNonExportTask("task-0", start.Add(time.Millisecond*10))
-	if err := save(task); err != nil {
-		t.Errorf("store with task-unique-id error: %v\n", err)
-		return
-	}
-	sched0.cache.Close()
-
-	futures, err := Init(url, &tests.Task{})
-	if err != nil {
-		t.Errorf("recover task with task-unique-id error: %v\n", err)
-		return
-	}
-	defer Stop()
-
-	for i := range futures {
-		futures[i].Get()
-	}
-	if !reflect.DeepEqual(tests.O.Get(), []string{}) {
-		t.Errorf("recover execution order is not as expected, got: %v", tests.O.Get())
-	}
-
-	sched0.cache.Del(prefixTask + "task-0")
-}
-
-func TestSchedError(t *testing.T) {
-	Init("redis://127.0.0.1:6379/2")
-	sched0.cache.Close()
-	if _, err := sched0.recover(&tests.Task{}); err == nil {
-		t.Fatalf("recover without conn must error, got nil")
-	}
-	if _, err := sched0.submit(&tests.Task{}); err == nil {
-		t.Fatalf("submit without conn must error, got nil")
-	}
-	if _, err := sched0.trigger(&tests.Task{}); err == nil {
-		t.Fatalf("trigger without conn must error, got nil")
-	}
-	if _, err := sched0.verify(&tests.Task{}); err == nil {
-		t.Fatalf("verify without conn must error, got nil")
-	}
-	r := record{
-		ID:        "id",
-		Execution: time.Now(),
-		Data:      func() {},
-	}
-	if err := r.save(); err == nil {
-		t.Fatalf("save func marshal must error, got nil")
-	}
-	sched0 = &sched{
-		timer: unsafe.Pointer(time.NewTimer(0)),
-		tasks: newTaskQueue(),
-		cache: sched0.cache,
-	}
-	sched0.worker()
-	sched0.arrival(newTaskItem(&tests.Task{}))
-	sched0.execute(newTaskItem(&tests.Task{}))
-	Pause()
-	sched0.worker()
-	Resume()
-
-	Init("redis://127.0.0.1:6379/2")
-	r = record{
-		ID:        "error",
-		Execution: time.Now(),
-		Data:      &tests.RetryTask{RetryCount: 1},
-	}
-	if err := r.save(); err != nil {
-		t.Fatalf("save object must not nil, got %v", err)
-	}
-	sched0.cache.Close()
-	sched0.load("error", &tests.Task{})
-	Init("redis://127.0.0.1:6379/2")
-	sched0.cache.Del(prefixTask + "error")
-	sched0.cache.Close()
-}
-
-func TestSchedStop2(t *testing.T) {
-	sched0 = &sched{
-		timer: unsafe.Pointer(time.NewTimer(0)),
-		tasks: newTaskQueue(),
-	}
-	Init("redis://127.0.0.1:6379/2")
-	atomic.AddUint64(&sched0.running, 2)
-	sign1 := make(chan int, 1)
-	sign2 := make(chan int, 1)
-	go func() {
-		Stop()
-		sign1 <- 1
-		close(sign1)
+		f.Get()
 	}()
-	go func() {
-		time.Sleep(time.Millisecond * 100)
-		atomic.AddUint64(&sched0.running, ^uint64(0))
-		time.Sleep(time.Millisecond * 100)
-		atomic.AddUint64(&sched0.running, ^uint64(0))
-		sign2 <- 2
-	}()
+	wg.Wait()
+	wantOrder(t, []string{"task-1", "task-2"})
+}
 
-	order := []int{}
-	select {
-	case n := <-sign1:
-		order = append(order, n)
-	case n := <-sign2:
-		order = append(order, n)
+func TestNilResult(t *testing.T) {
+	setup(t)
+
+	f, err := Submit(newNilTask("nil-task", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	got, ok := f.Get().(string)
+	if !ok || got == "" {
+		t.Fatalf("future value = %v, want a placeholder string", f.Get())
+	}
+}
+
+func TestPanicReachesFuture(t *testing.T) {
+	setup(t)
+
+	f, err := Submit(newPanicTask("boom", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	err, ok := f.Get().(error)
+	if !ok {
+		t.Fatalf("future value = %v, want an error", f.Get())
+	}
+	if got := err.Error(); got == "" {
+		t.Fatal("panic error must describe the task")
+	}
+	wantOrder(t, []string{"boom"})
+}
+
+func TestRetry(t *testing.T) {
+	setup(t)
+
+	f, err := Submit(newRetryTask("retry", time.Now().UTC(), 3))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	f.Get()
+	wantOrder(t, []string{"retry", "retry", "retry"})
+	if span := o.span(); span < 200*time.Millisecond {
+		t.Fatalf("retries took %v, want at least 200ms apart", span)
+	}
+}
+
+func TestRetryAfterError(t *testing.T) {
+	setup(t)
+
+	f, err := Submit(newFailTask("fail", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if got := f.Get(); got != "recovered" {
+		t.Fatalf("future value = %v, want \"recovered\"", got)
+	}
+	wantOrder(t, []string{"fail", "fail"})
+}
+
+func TestStoreHoldsLaterExecution(t *testing.T) {
+	mr := setup(t)
+
+	start := time.Now().UTC()
+	f, err := Submit(newTask("late", start.Add(200*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	// Another replica postpones the task in the store. This replica must
+	// notice at execution time and reschedule instead of running early.
+	postpone(t, mr, "late", 400*time.Millisecond)
+
+	time.Sleep(300 * time.Millisecond)
+	wantOrder(t, nil)
+
+	f.Get()
+	wantOrder(t, []string{"late"})
+}
+
+// postpone rewrites the persisted execution time of a task.
+func postpone(t *testing.T, mr *miniredis.Miniredis, id string, d time.Duration) {
+	t.Helper()
+	raw, err := mr.Get(prefixTask + id)
+	if err != nil {
+		t.Fatalf("read record: %v", err)
+	}
+	var r record
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatalf("decode record: %v", err)
+	}
+	r.Execution = r.Execution.Add(d)
+	out, err := json.Marshal(&r)
+	if err != nil {
+		t.Fatalf("encode record: %v", err)
+	}
+	mr.Set(prefixTask+id, string(out))
+}
+
+func TestPauseAndResume(t *testing.T) {
+	setup(t)
+
+	f, err := Submit(newTask("paused", time.Now().UTC().Add(100*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	Pause()
+	time.Sleep(400 * time.Millisecond)
+	wantOrder(t, nil)
+
+	Resume()
+	f.Get()
+	wantOrder(t, []string{"paused"})
+}
+
+func TestWaitDrainsQueue(t *testing.T) {
+	setup(t)
+
+	start := time.Now().UTC()
+	for i := range 5 {
+		if _, err := Submit(newTask(fmt.Sprintf("w-%d", i),
+			start.Add(time.Duration(i)*20*time.Millisecond))); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+	// Several waiters must all wake up.
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() { defer wg.Done(); Wait() }()
+	}
+	wg.Wait()
+	if got := len(o.get()); got != 5 {
+		t.Fatalf("Wait returned with %d of 5 tasks done", got)
+	}
+}
+
+func TestStopWaitsForRunningTask(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	f, err := Submit(newTask("stopping", time.Now().UTC().Add(100*time.Millisecond)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	f.Get()
+	Stop()
+	Stop() // idempotent
+	wantOrder(t, []string{"stopping"})
+}
+
+func TestStopLeavesQueuedTaskForRecovery(t *testing.T) {
+	o.clear()
+	mr, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := Submit(newTask("survivor", time.Now().UTC().Add(time.Hour))); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	Stop()
+
+	// The record outlives the scheduler and comes back on the next Init.
+	if _, err := mr.Get(prefixTask + "survivor"); err != nil {
+		t.Fatalf("queued task must stay in the store: %v", err)
+	}
+	futures, err := Init(url, &task{})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(Stop)
+	if len(futures) != 1 {
+		t.Fatalf("recovered %d futures, want 1", len(futures))
+	}
+}
+
+func TestRecover(t *testing.T) {
+	o.clear()
+	mr, url := newServer(t)
+
+	start := time.Now().UTC()
+	want := make([]string, 5)
+	st, err := newRedisStore(url)
+	if err != nil {
+		t.Fatalf("newRedisStore: %v", err)
+	}
+	for i := range want {
+		id := fmt.Sprintf("task-%d", i)
+		want[i] = id
+		if err := saveTask(t.Context(), st,
+			newTask(id, start.Add(time.Duration(i)*20*time.Millisecond))); err != nil {
+			t.Fatalf("saveTask: %v", err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	_ = mr
+
+	futures, err2 := Init(url, &task{})
+	if err2 != nil {
+		t.Fatalf("Init: %v", err2)
+	}
+	t.Cleanup(Stop)
+	if len(futures) != len(want) {
+		t.Fatalf("recovered %d futures, want %d", len(futures), len(want))
+	}
+	for _, f := range futures {
+		f.Get()
+	}
+	wantOrder(t, want)
+}
+
+func TestInitReplacesRunningScheduler(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	first := current()
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init again: %v", err)
+	}
+	t.Cleanup(Stop)
+	if current() == first {
+		t.Fatal("Init must install a new scheduler")
 	}
 	select {
-	case n := <-sign1:
-		order = append(order, n)
-	case n := <-sign2:
-		order = append(order, n)
+	case <-first.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Init must stop the scheduler it replaces")
 	}
-	want := []int{2, 1}
+}
 
-	if !reflect.DeepEqual(order, want) {
-		t.Fatalf("unexpected order of stop")
+// unlockedTask reports the value the scheduler publishes when another
+// replica already holds the lock: nothing at all.
+func TestLockHeldByAnotherReplica(t *testing.T) {
+	mr := setup(t)
+
+	id := "locked"
+	mr.Set(prefixLock+id, "locked")
+	f, err := Submit(newTask(id, time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
 	}
+	select {
+	case <-f.Done():
+		t.Fatal("a task whose lock is held must not run")
+	case <-time.After(300 * time.Millisecond):
+	}
+	wantOrder(t, nil)
+}
 
+func TestSubmitStoreFailure(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	st, err := newRedisStore(url)
+	if err != nil {
+		t.Fatalf("newRedisStore: %v", err)
+	}
+	fs := &faultyStore{store: st}
+	fs.failSet.Store(true)
+	if _, err := start(fs); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(Stop)
+
+	if _, err := Submit(newTask("nope", time.Now().UTC())); err == nil {
+		t.Fatal("Submit must report a store failure")
+	}
+}
+
+func TestUnmarshalableTask(t *testing.T) {
+	setup(t)
+
+	if _, err := Submit(&badTask{Base: newBase("bad", time.Now().UTC())}); err == nil {
+		t.Fatal("Submit must reject a task that json cannot encode")
+	}
+}
+
+// badTask cannot be encoded, so it cannot be persisted or scheduled.
+type badTask struct {
+	*Base
+	Ch chan int `json:"ch"`
+}
+
+func (t *badTask) Execute() (any, bool, error) { return nil, false, nil }
+
+func TestConcurrentSubmitters(t *testing.T) {
+	setup(t)
+
+	const n = 64
+	start := time.Now().UTC()
+	futures := make([]Future, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f, err := Submit(newTask(fmt.Sprintf("c-%d", i), start))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			futures[i] = f
+		}()
+	}
+	wg.Wait()
+	for i, f := range futures {
+		if f == nil {
+			t.Fatalf("submission %d lost", i)
+		}
+		f.Get()
+	}
+	if got := len(o.get()); got != n {
+		t.Fatalf("%d of %d tasks ran", got, n)
+	}
+}
+
+func TestFutureResolvesOnce(t *testing.T) {
+	f := newFuture()
+	f.put("first")
+	f.put("second")
+	if got := f.Get(); got != "first" {
+		t.Fatalf("Get() = %v, want \"first\"", got)
+	}
+	select {
+	case <-f.Done():
+	default:
+		t.Fatal("Done must be closed after put")
+	}
+}
+
+func TestContextCancelsFutureWait(t *testing.T) {
+	f := newFuture()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	select {
+	case <-f.Done():
+		t.Fatal("future must stay pending")
+	case <-ctx.Done():
+	}
 }

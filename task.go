@@ -1,38 +1,79 @@
-// Copyright 2018-2019 Changkun Ou. All rights reserved.
+// Copyright 2018 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
 package sched
 
 import (
+	"sync/atomic"
 	"time"
 )
 
-// Task interface for sched
+// Task is the unit of work that sched schedules.
+//
+// An implementation must be a struct that json.Marshal can encode, because
+// sched persists it to recover the schedule after a restart. Exported fields
+// are the only state that survives a restart; sched calls SetID and
+// SetExecution to restore the rest.
 type Task interface {
-	// GetID must returns a unique ID for all of the scheduled task.
-	GetID() (id string)
-	// SetID will set id as the unique ID for the scheduled task.
+	// ID returns an identifier that is unique among all scheduled tasks.
+	ID() string
+	// SetID restores the identifier of a recovered task.
 	SetID(id string)
-	// IsValidID verifies that an ID is an valid ID for the task.
-	IsValidID() bool
-	// GetExecution returns the time for task execution.
-	GetExecution() (execute time.Time)
-	// SetExecution sets a new time for the task execution
-	SetExecution(new time.Time) (old time.Time)
-	// GetTimeout returns the locking time for a giving task.
-	// Users should aware that this time should *not* longer than the task execution time.
-	// For instance, if your task consumes 1 second for execution,
-	// then the locking time must shorter than 1 second.
-	GetTimeout() (lockTimeout time.Duration)
-	// GetRetryTime returns the retry time if a task was failed.
-	GetRetryTime() (execute time.Time)
-	// Execute executes the actual task, it can return a result,
-	// or if the task need a retry, or it was failed in this execution.
-	Execute() (result interface{}, retry bool, fail error)
+	// Execution returns the time at which the task must run.
+	Execution() time.Time
+	// SetExecution sets the time at which the task must run.
+	SetExecution(t time.Time)
+	// Timeout returns the lifetime of the distributed lock that keeps
+	// replicas from running the task twice. It must be shorter than the
+	// time Execute needs, otherwise a second replica can start the task
+	// while the first one still runs it.
+	Timeout() time.Duration
+	// RetryTime returns the time of the next attempt if Execute asks for
+	// a retry or fails.
+	RetryTime() time.Time
+	// Execute runs the task. It returns the result to publish through the
+	// Future, whether the task must run again, and the failure if there
+	// was one. A non-nil error or retry == true reschedules the task at
+	// RetryTime.
+	Execute() (result any, retry bool, err error)
 }
 
-// TaskFuture is the future of Task execution
-type TaskFuture interface {
-	Get() interface{}
+// Future is the pending result of a scheduled task.
+type Future interface {
+	// Get blocks until the task completes and returns its result. If the
+	// task panics, Get returns an error that describes the panic.
+	Get() any
+	// Done is closed when the result is available. Use it to wait with a
+	// select statement, for example against a context.
+	Done() <-chan struct{}
+}
+
+// future is the sched-side implementation of Future.
+type future struct {
+	done   chan struct{}
+	filled atomic.Bool
+	value  any // written before done closes, read after
+}
+
+func newFuture() *future {
+	return &future{done: make(chan struct{})}
+}
+
+// Get implements Future.
+func (f *future) Get() any {
+	<-f.done
+	return f.value
+}
+
+// Done implements Future.
+func (f *future) Done() <-chan struct{} { return f.done }
+
+// put publishes v. Only the first call has an effect, so a task that is
+// retried and then succeeds publishes exactly one result.
+func (f *future) put(v any) {
+	if f.filled.CompareAndSwap(false, true) {
+		f.value = v
+		close(f.done)
+	}
 }
