@@ -272,7 +272,9 @@ func postpone(t *testing.T, mr *miniredis.Miniredis, id string, d time.Duration)
 	if err != nil {
 		t.Fatalf("encode record: %v", err)
 	}
-	mr.Set(prefixTask+id, string(out))
+	if err := mr.Set(prefixTask+id, string(out)); err != nil {
+		t.Fatalf("write record: %v", err)
+	}
 }
 
 func TestPauseAndResume(t *testing.T) {
@@ -419,7 +421,9 @@ func TestLockHeldByAnotherReplica(t *testing.T) {
 	mr := setup(t)
 
 	id := "locked"
-	mr.Set(prefixLock+id, "locked")
+	if err := mr.Set(prefixLock+id, "locked"); err != nil {
+		t.Fatalf("take lock: %v", err)
+	}
 	f, err := Submit(newTask(id, time.Now().UTC()))
 	if err != nil {
 		t.Fatalf("Submit: %v", err)

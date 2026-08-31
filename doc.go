@@ -1,91 +1,111 @@
-// Copyright 2018-2019 Changkun Ou. All rights reserved.
+// Copyright 2018 Changkun Ou. All rights reserved.
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
 /*
-Package sched provides a consistently reliable task scheduler with future support.
+Package sched schedules tasks at a given time, keeps them across restarts,
+and runs each one exactly once across every replica of an application.
 
-Introduction
+# Introduction
 
-sched is a consistently reliable embedded task scheduler library for Go.
-It applies to be a microkernel of an internal application service, and
-pluggable tasks must implements sched Task interface.
+sched is an embedded scheduler. It is a library, not a service: it lives
+inside the application it schedules for. A task is a Go type that implements
+[Task], so it carries its own data and its own code, and sched persists it to
+Redis. After a crash or a deployment the tasks that had not run yet come back
+with the application.
 
-sched not only schedules a task at a specific time or reschedules a planned
-task immediately, but also flexible to support periodically tasks, which
-differ from traditional non-consistently unreliable cron task scheduling.
+Where cron fires a command and forgets it, sched gives every task a [Future]
+that carries the result, reschedules a task that asks for a retry, and takes a
+distributed lock before it runs, so that a task scheduled on five replicas
+still runs once.
 
-Furthermore, sched manage tasks, like goroutine runtime scheduler, uses
-greedy scheduling schedules all tasks and a distributed lock mechanism that
-ensures tasks can only be executed once across multiple replica instances.
+# Usage
 
-Usage
+Init connects to Redis and restores the tasks a previous run left behind.
+Pass an empty value of every task type that has to be recoverable, because
+JSON alone cannot say which type a record belongs to.
 
-Callers must initialize sched database when using sched.
-sched schedules different tasks in a priority queue and schedules task with
-minimum goroutines when tasks with same execution time arrival:
-
-	// Init sched, with tasks should recovered when reboot
-	futures, err := sched.Init(
-		"redis://127.0.0.1:6379/1"，
-		&ArbitraryTask1{},
-		&ArbitraryTask2{},
+	futures, err := sched.Init("redis://127.0.0.1:6379/0",
+		&EmailTask{},
+		&ReportTask{},
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	// Retrieve task's future
-	for i := range futures {
-		fmt.Printf("%v", futures[i].Get())
+	for _, f := range futures {
+		fmt.Println(f.Get())
 	}
 
-	// Setup tasks, use future.Get() to retrieve the future of task
-	future, err := sched.Submit(&ArbitraryTask{...})
+Submit schedules a task for the time it reports, and Trigger schedules it for
+now:
+
+	f, err := sched.Submit(&EmailTask{To: "hi@changkun.de", At: tomorrow})
 	if err != nil {
-		panic(err)
+		return err
 	}
-	fmt.Printf("%v", future.Get())
+	fmt.Println(f.Get())
 
-	// Launch a task, use future.Get() to retrieve the future of task
-	future, err := sched.Trigger(&ArbitraryTask{...})
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("%v", future.Get())
+Get blocks until the task finishes. Done gives the same result without
+blocking, so a caller can give up:
 
-	// Pause sched
-	sched.Pause()
-
-	// Resume sched
-	sched.Resume()
-
-	// Stop sched gracefully
-	sched.Stop()
-
-Task interface
-
-A Task that can be scheduled by sched must implements the following task interface:
-
-	// Task interface for sched
-	type Task interface {
-		GetID() (id string)
-		SetID(id string)
-		IsValidID() bool
-		GetExecution() (execute time.Time)
-		SetExecution(new time.Time) (old time.Time)
-		GetTimeout() (lockTimeout time.Duration)
-		GetRetryTime() (execute time.Time)
-		Execute() (result interface{}, retry bool, fail error)
+	select {
+	case <-f.Done():
+		fmt.Println(f.Get())
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
-Note that your task must be a serilizable struct by `json.Marshal()`,
-otherwise it cannot be persist by goshceudler (e.g. `type Func func()` cannot be scheduled)
+Submitting an identifier that is already scheduled moves the task to the new
+time instead of adding a second one, and resolves every Future that waits for
+it. Pause stops the scheduler from starting tasks, Resume starts it again,
+Wait blocks until nothing is queued or running, and Stop shuts the scheduler
+down after the tasks that already started have finished.
 
-Task Future
+# Writing a task
 
-A Task can have a future of its final execution result. `sched.Submit` and `sched.Trigger`
-both returns future object of `Execute()`'s `result interface{}`. To get the future:
+A task carries its own state, so every field the task needs after a restart
+has to be exported and encodable by [encoding/json]. sched restores the
+identifier and the execution time itself.
 
-	future.Get().(YourResultType)
+	type EmailTask struct {
+		To string    `json:"to"`
+		At time.Time `json:"at"`
+
+		id string
+	}
+
+	func (t *EmailTask) ID() string           { return t.id }
+	func (t *EmailTask) SetID(id string)      { t.id = id }
+	func (t *EmailTask) Execution() time.Time { return t.At }
+	func (t *EmailTask) SetExecution(e time.Time) { t.At = e }
+	func (t *EmailTask) Timeout() time.Duration  { return time.Minute }
+	func (t *EmailTask) RetryTime() time.Time {
+		return time.Now().UTC().Add(time.Minute)
+	}
+
+	func (t *EmailTask) Execute() (any, bool, error) {
+		if err := send(t.To); err != nil {
+			return nil, true, err // retry at RetryTime
+		}
+		return "sent", false, nil
+	}
+
+Timeout is the lifetime of the lock that keeps two replicas from running the
+same task. Keep it shorter than the time Execute needs, or a second replica
+can start while the first one still runs.
+
+# How it works
+
+One goroutine owns a priority queue of tasks ordered by execution time, and
+one timer serves the task at the head of that queue. Callers never touch the
+queue. Submit persists the task, appends it to a wait-free multi-producer
+queue and signals the scheduler, all in a bounded number of atomic steps, so
+no caller ever waits for a lock to schedule a task. The package holds no
+mutex.
+
+Each task that comes due runs in its own goroutine, so a slow task delays
+neither the scheduler nor the tasks behind it. Before it runs, the goroutine
+takes the Redis lock of the task and rereads the persisted execution time: if
+another replica moved the task, this one reschedules instead of running early.
 */
 package sched
