@@ -25,9 +25,12 @@ type Task interface {
 	// SetExecution sets the time at which the task must run.
 	SetExecution(t time.Time)
 	// Timeout returns the lifetime of the distributed lock that keeps
-	// replicas from running the task twice. It must be shorter than the
-	// time Execute needs, otherwise a second replica can start the task
-	// while the first one still runs it.
+	// replicas from running the task twice. sched releases the lock as
+	// soon as Execute returns, so the lifetime only matters when the
+	// replica dies while the task runs. Give it more than Execute
+	// normally needs: a lifetime that expires during execution lets a
+	// second replica start the same task, and one much longer than that
+	// keeps the task unclaimable after a crash.
 	Timeout() time.Duration
 	// RetryTime returns the time of the next attempt if Execute asks for
 	// a retry or fails.

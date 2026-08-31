@@ -85,9 +85,11 @@ func (t *EmailTask) Execute() (any, bool, error) {
 }
 ```
 
-`Timeout` is how long the lock that keeps two replicas apart stays alive. Keep
-it shorter than the time `Execute` needs, otherwise a second replica can start
-the task while the first one still runs it.
+`Timeout` is how long the lock that keeps two replicas apart stays alive.
+sched releases it as soon as `Execute` returns, so the lifetime only matters
+when the replica dies mid-task. Give it more than `Execute` normally needs: a
+lifetime that expires during execution lets a second replica start the same
+task, and one much longer than that keeps the task unclaimable after a crash.
 
 A task that panics does not take the process down: the panic comes back
 through the future as an `error`. A future always resolves. If sched refuses
@@ -112,9 +114,11 @@ arrive.
 
 One goroutine owns a priority queue of tasks ordered by execution time, and a
 single timer serves the head of that queue. Callers never touch the queue.
-`Submit` persists the task, appends it to a wait-free multi-producer queue and
-signals the scheduler, all in a bounded number of atomic steps, so no caller
-ever waits for a lock to schedule a task. The package holds no mutex.
+`Submit` first persists the task, which is a round-trip to Redis, and then
+hands it to the scheduler through a wait-free multi-producer queue: a fixed
+number of atomic operations, with no loop and no retry, so no caller ever
+waits for a lock or for another caller. `Pause`, `Resume` and the retry path
+use the same handoff. The package holds no mutex.
 
 Each task that comes due runs in its own goroutine, so a slow task delays
 neither the scheduler nor the tasks behind it.

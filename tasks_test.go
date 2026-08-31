@@ -138,8 +138,6 @@ func newRetryTask(id string, e time.Time, maxRetry int64) *retryTask {
 	return &retryTask{Base: newBase(id, e), MaxRetry: maxRetry}
 }
 
-func (t *retryTask) Timeout() time.Duration { return time.Millisecond }
-
 func (t *retryTask) RetryTime() time.Time {
 	return time.Now().UTC().Add(100 * time.Millisecond)
 }
