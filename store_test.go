@@ -164,7 +164,10 @@ func TestRestoreFailure(t *testing.T) {
 	if _, err := start(st, &task{}); !errors.Is(err, errInjected) {
 		t.Fatalf("start = %v, want the injected failure", err)
 	}
-	Stop()
+	// A failed start must leave no scheduler behind.
+	if current() != nil {
+		t.Fatal("a failed start must not install a scheduler")
+	}
 }
 
 func TestLoadRejectsUnusableRecords(t *testing.T) {

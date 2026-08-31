@@ -64,7 +64,15 @@ func start(st store, tasks ...Task) ([]Future, error) {
 		old.shutdown()
 	}
 	go s.run()
-	return s.restore(tasks...)
+	futures, err := s.restore(tasks...)
+	if err != nil {
+		// Leave nothing behind: a caller that sees an error from Init
+		// must not find a scheduler that Submit would accept tasks for.
+		s.shutdown()
+		sched0.CompareAndSwap(s, nil)
+		return nil, err
+	}
+	return futures, nil
 }
 
 // Submit schedules t to run at t.Execution() and returns the Future of its
@@ -228,8 +236,10 @@ func (s *sched) run() {
 				}
 				s.dispatch(s.tasks.pop())
 			}
+			// Dispatching may have taken time, so measure the wait
+			// from now rather than from the start of the round.
 			if head := s.tasks.peek(); head != nil {
-				timer.Reset(head.when.Sub(now))
+				timer.Reset(time.Until(head.when))
 				fire = timer.C
 			}
 		}
