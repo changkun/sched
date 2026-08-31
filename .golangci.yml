@@ -1,7 +1,44 @@
-service:
-  golangci-lint-version: 1.13.x
+version: "2"
+
 linters:
-  enable-all: true
-  disable:
-    - errcheck
-    - gochecknoglobals
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - durationcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - makezero
+    - misspell
+    - nilerr
+    - nolintlint
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: context-as-argument
+        - name: unreachable-code
+  exclusions:
+    rules:
+      # Test fixtures deliberately panic and ignore results.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
