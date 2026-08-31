@@ -232,10 +232,9 @@ func TestExecuteSkipsUnverifiableTask(t *testing.T) {
 	// The record disappears before the task runs, so the scheduler cannot
 	// confirm the execution time and drops the task.
 	st.failGet.Store(true)
-	select {
-	case <-f.Done():
-		t.Fatal("a task without a record must not run")
-	case <-time.After(500 * time.Millisecond):
+	got, ok := f.Get().(error)
+	if !ok || !errors.Is(got, ErrTaskUnverifiable) || !errors.Is(got, errInjected) {
+		t.Fatalf("future value = %v, want ErrTaskUnverifiable wrapping the store failure", f.Get())
 	}
 	wantOrder(t, nil)
 }
@@ -253,10 +252,9 @@ func TestExecuteSkipsWhenLockFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	select {
-	case <-f.Done():
-		t.Fatal("a task whose lock fails must not run")
-	case <-time.After(300 * time.Millisecond):
+	got, ok := f.Get().(error)
+	if !ok || !errors.Is(got, errInjected) {
+		t.Fatalf("future value = %v, want the injected lock failure", f.Get())
 	}
 	wantOrder(t, nil)
 }

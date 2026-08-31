@@ -94,6 +94,14 @@ Timeout is the lifetime of the lock that keeps two replicas from running the
 same task. Keep it shorter than the time Execute needs, or a second replica
 can start while the first one still runs.
 
+# What a Future returns
+
+Get returns whatever Execute returned, or an error. A task that panics
+produces an error that names the task and the panic. A task that sched
+refused to run produces one of [ErrTaskClaimed], [ErrTaskUnverifiable] or
+[ErrStopped], so a caller is never left waiting for a result that cannot
+arrive.
+
 # How it works
 
 One goroutine owns a priority queue of tasks ordered by execution time, and

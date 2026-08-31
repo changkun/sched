@@ -90,7 +90,11 @@ it shorter than the time `Execute` needs, otherwise a second replica can start
 the task while the first one still runs it.
 
 A task that panics does not take the process down: the panic comes back
-through the future as an `error`.
+through the future as an `error`. A future always resolves. If sched refuses
+to run a task, `Get` returns `ErrTaskClaimed` (another replica took it),
+`ErrTaskUnverifiable` (its record could not be read) or `ErrStopped` (the
+scheduler shut down first), so no caller waits for a result that cannot
+arrive.
 
 ## What it does for you
 

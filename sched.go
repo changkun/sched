@@ -14,8 +14,24 @@ import (
 	"time"
 )
 
-// ErrNotInitialized is returned by Submit and Trigger before Init succeeded.
-var ErrNotInitialized = errors.New("sched: not initialized, call Init first")
+// Errors that sched reports to the caller. The three task errors reach the
+// caller through the Future, because a task that sched refuses to run still
+// has to release whoever waits for its result.
+var (
+	// ErrNotInitialized is returned by Submit and Trigger before Init
+	// succeeded, and after Stop.
+	ErrNotInitialized = errors.New("sched: not initialized, call Init first")
+	// ErrTaskClaimed reports that another replica holds the lock of the
+	// task. That replica runs it, and this one has no result to publish.
+	ErrTaskClaimed = errors.New("sched: task claimed by another replica")
+	// ErrTaskUnverifiable reports that sched could not read the persisted
+	// record of a task. Without it sched cannot tell whether another
+	// replica moved the task, so it refuses to run it.
+	ErrTaskUnverifiable = errors.New("sched: cannot read the task record")
+	// ErrStopped reports that the scheduler stopped before the task ran.
+	// The task stays in the store and the next Init recovers it.
+	ErrStopped = errors.New("sched: scheduler stopped before the task ran")
+)
 
 // sched0 is the scheduler the package-level API drives. Init installs it and
 // Stop removes it.
@@ -222,12 +238,32 @@ func (s *sched) run() {
 		case <-fire:
 		case <-s.wake:
 		case <-s.quit:
+			s.abandon()
 			return
 		}
 		if fire != nil {
 			timer.Stop()
 		}
 	}
+}
+
+// abandon releases every caller that waits for a task the scheduler will not
+// run any more. The tasks themselves stay in the store, so the next Init
+// recovers them.
+func (s *sched) abandon() {
+	for {
+		e, ok := s.intake.pop()
+		if !ok {
+			break
+		}
+		s.pending.Add(-1)
+		e.put(fmt.Errorf("sched: task %s: %w", e.task.ID(), ErrStopped))
+	}
+	for e := s.tasks.pop(); e != nil; e = s.tasks.pop() {
+		s.queued.Add(-1)
+		e.put(fmt.Errorf("sched: task %s: %w", e.task.ID(), ErrStopped))
+	}
+	s.progress.fire()
 }
 
 // absorb moves one submitted entry into the queue. A task that is already
@@ -265,7 +301,12 @@ func (s *sched) arrive(e *entry) {
 
 	ctx := context.Background()
 	ok, err := s.store.SetNX(ctx, prefixLock+e.task.ID(), "locked", e.task.Timeout())
-	if err != nil || !ok {
+	if err != nil {
+		e.put(fmt.Errorf("sched: task %s: cannot take the lock: %w", e.task.ID(), err))
+		return
+	}
+	if !ok {
+		e.put(fmt.Errorf("sched: task %s: %w", e.task.ID(), ErrTaskClaimed))
 		return
 	}
 	s.execute(ctx, e)
@@ -286,6 +327,7 @@ func (s *sched) execute(ctx context.Context, e *entry) {
 	// The store holds the truth, and the later of the two times wins.
 	r, err := readRecord(ctx, s.store, e.task.ID())
 	if err != nil {
+		e.put(fmt.Errorf("sched: task %s: %w: %w", e.task.ID(), ErrTaskUnverifiable, err))
 		return
 	}
 	execution := e.task.Execution()
@@ -326,6 +368,9 @@ func (s *sched) reschedule(ctx context.Context, e *entry, when time.Time) {
 
 // submit persists the task and hands it to the scheduler loop.
 func (s *sched) submit(t Task) (Future, error) {
+	if s.stopped.Load() {
+		return nil, ErrNotInitialized
+	}
 	if err := saveTask(context.Background(), s.store, t); err != nil {
 		return nil, err
 	}

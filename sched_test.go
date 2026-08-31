@@ -415,8 +415,6 @@ func TestInitReplacesRunningScheduler(t *testing.T) {
 	}
 }
 
-// unlockedTask reports the value the scheduler publishes when another
-// replica already holds the lock: nothing at all.
 func TestLockHeldByAnotherReplica(t *testing.T) {
 	mr := setup(t)
 
@@ -428,10 +426,9 @@ func TestLockHeldByAnotherReplica(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	select {
-	case <-f.Done():
-		t.Fatal("a task whose lock is held must not run")
-	case <-time.After(300 * time.Millisecond):
+	got, ok := f.Get().(error)
+	if !ok || !errors.Is(got, ErrTaskClaimed) {
+		t.Fatalf("future value = %v, want ErrTaskClaimed", f.Get())
 	}
 	wantOrder(t, nil)
 }
@@ -524,5 +521,94 @@ func TestContextCancelsFutureWait(t *testing.T) {
 	case <-f.Done():
 		t.Fatal("future must stay pending")
 	case <-ctx.Done():
+	}
+}
+
+func TestStopReleasesQueuedFutures(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	f, err := Submit(newTask("never", time.Now().UTC().Add(time.Hour)))
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	s := current()
+	Stop()
+
+	got, ok := f.Get().(error)
+	if !ok || !errors.Is(got, ErrStopped) {
+		t.Fatalf("future value = %v, want ErrStopped", f.Get())
+	}
+	if _, err := s.submit(newTask("after", time.Now().UTC())); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("submit after Stop = %v, want ErrNotInitialized", err)
+	}
+}
+
+func TestAbandonReleasesQueuedAndPendingFutures(t *testing.T) {
+	st := newFaultyStore(t)
+	s := newSched(st)
+
+	queued := newEntry("queued", time.Now().UTC())
+	s.queued.Add(1)
+	s.tasks.push(queued)
+
+	pending := newEntry("pending", time.Now().UTC())
+	s.pending.Add(1)
+	s.intake.push(pending)
+
+	s.abandon()
+
+	for _, e := range []*entry{queued, pending} {
+		got, ok := e.futures[0].Get().(error)
+		if !ok || !errors.Is(got, ErrStopped) {
+			t.Fatalf("%s future = %v, want ErrStopped", e.task.ID(), e.futures[0].Get())
+		}
+	}
+	if s.outstanding() != 0 {
+		t.Fatalf("outstanding = %d, want 0", s.outstanding())
+	}
+}
+
+func TestConcurrentStop(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	s := current()
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.shutdown() }()
+	}
+	wg.Wait()
+	Stop()
+
+	select {
+	case <-s.done:
+	default:
+		t.Fatal("the scheduler loop must have returned")
+	}
+}
+
+func TestAwaitReturnsAfterTheLoopStops(t *testing.T) {
+	o.clear()
+	_, url := newServer(t)
+	if _, err := Init(url); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	s := current()
+	Stop()
+
+	// The condition never holds, so await can only return on s.done.
+	done := make(chan struct{})
+	go func() { defer close(done); s.await(func() bool { return false }) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("await must return once the scheduler stopped")
 	}
 }
