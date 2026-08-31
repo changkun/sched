@@ -75,7 +75,7 @@ func TestScheduleOrder(t *testing.T) {
 	for i := range futures {
 		id := fmt.Sprintf("task-%d", i)
 		want[i] = id
-		f, err := Submit(newTask(id, start.Add(time.Duration(i)*20*time.Millisecond)))
+		f, err := Submit(newTask(id, start.Add(time.Duration(i)*30*time.Millisecond)))
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
@@ -240,16 +240,21 @@ func TestRetryAfterError(t *testing.T) {
 func TestStoreHoldsLaterExecution(t *testing.T) {
 	mr := setup(t)
 
+	// Pause first: Submit persists the task before it returns, so the
+	// store can be rewritten with no chance of the task running in
+	// between.
+	Pause()
 	start := time.Now().UTC()
-	f, err := Submit(newTask("late", start.Add(200*time.Millisecond)))
+	f, err := Submit(newTask("late", start.Add(50*time.Millisecond)))
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	// Another replica postpones the task in the store. This replica must
-	// notice at execution time and reschedule instead of running early.
+	// Another replica postpones the task. This replica must notice at
+	// execution time and reschedule instead of running early.
 	postpone(t, mr, "late", 400*time.Millisecond)
+	Resume()
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	wantOrder(t, nil)
 
 	f.Get()
@@ -280,11 +285,11 @@ func postpone(t *testing.T, mr *miniredis.Miniredis, id string, d time.Duration)
 func TestPauseAndResume(t *testing.T) {
 	setup(t)
 
-	f, err := Submit(newTask("paused", time.Now().UTC().Add(100*time.Millisecond)))
+	Pause()
+	f, err := Submit(newTask("paused", time.Now().UTC().Add(50*time.Millisecond)))
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	Pause()
 	time.Sleep(400 * time.Millisecond)
 	wantOrder(t, nil)
 
