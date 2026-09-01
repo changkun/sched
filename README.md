@@ -2,7 +2,6 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/changkun/sched.svg)](https://pkg.go.dev/github.com/changkun/sched)
 [![CI](https://github.com/changkun/sched/actions/workflows/ci.yml/badge.svg)](https://github.com/changkun/sched/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/changkun/sched)](https://goreportcard.com/report/github.com/changkun/sched)
 [![codecov](https://codecov.io/gh/changkun/sched/branch/master/graph/badge.svg)](https://codecov.io/gh/changkun/sched)
 [![Release](https://img.shields.io/github/v/release/changkun/sched)](https://github.com/changkun/sched/releases)
 
@@ -117,17 +116,50 @@ single timer serves the head of that queue. Callers never touch the queue.
 `Submit` first persists the task, which is a round-trip to Redis, and then
 hands it to the scheduler through a wait-free multi-producer queue: a fixed
 number of atomic operations, with no loop and no retry, so no caller ever
-waits for a lock or for another caller. `Pause`, `Resume` and the retry path
-use the same handoff. The package holds no mutex.
+waits for a lock or for another caller. The retry path uses the same queue.
+`Pause`, `Resume` and `Stop` do not queue anything; they set an atomic counter
+and drop a signal that tells the scheduler to look again. The package holds no
+mutex.
 
 Each task that comes due runs in its own goroutine, so a slow task delays
 neither the scheduler nor the tasks behind it.
 
 ```
-Submit ─┐
-Trigger ─┼─▶ intake (wait-free MPSC) ─▶ scheduler goroutine ─┬─▶ task goroutine ─▶ Future
-Pause   ─┘                                 owns queue+timer  └─▶ task goroutine ─▶ Future
+Submit ┐
+Trigger├──▶ intake ─────────┐
+retry  ┘    wait-free MPSC  │
+                            ▼
+                    scheduler goroutine ──┬──▶ goroutine: lock ▸ Execute ▸ Future
+Pause  ┐                    ▲             └──▶ goroutine: lock ▸ Execute ▸ Future
+Resume ├──▶ wake signal ────┘
+Stop   ┘                    owns the priority queue
+                            and the one timer
 ```
+
+## Upgrading from 0.8
+
+The 0.9 release renames most of the API. The change is mechanical.
+
+| 0.8 | 0.9 |
+| --- | --- |
+| `TaskFuture` | `Future`, plus a `Done() <-chan struct{}` method |
+| `Task.GetID` | `Task.ID` |
+| `Task.GetExecution` | `Task.Execution` |
+| `Task.SetExecution(t) (old time.Time)` | `Task.SetExecution(t)` |
+| `Task.GetTimeout` | `Task.Timeout` |
+| `Task.GetRetryTime` | `Task.RetryTime` |
+| `Task.IsValidID` | removed; sched skips a record that decodes to a zero value |
+| `sched/simsched` | removed; this package is the fast one now |
+| `sched/tests` | removed; the example tasks live in the documentation |
+
+Two behaviours changed. `Submit` and `Trigger` return `ErrNotInitialized`
+before `Init` instead of panicking. A future always resolves: the paths that
+used to leave a caller blocked forever now publish `ErrTaskClaimed`,
+`ErrTaskUnverifiable` or `ErrStopped`.
+
+Read `Task.Timeout` again if you copied the old comment. It said to keep the
+lock shorter than the execution, which is the setting that lets two replicas
+run one task.
 
 ## Requirements
 

@@ -112,8 +112,10 @@ one timer serves the task at the head of that queue. Callers never touch the
 queue. Submit first persists the task, which is a round-trip to Redis, and
 then hands it to the scheduler through a wait-free multi-producer queue: a
 fixed number of atomic operations, with no loop and no retry, so no caller
-ever waits for a lock or for another caller. Pause, Resume and the retry path
-use the same handoff. The package holds no mutex.
+ever waits for a lock or for another caller. The retry path uses the same
+queue. Pause, Resume and Stop queue nothing; they set an atomic counter and
+drop a signal that tells the scheduler to look again. The package holds no
+mutex.
 
 Each task that comes due runs in its own goroutine, so a slow task delays
 neither the scheduler nor the tasks behind it. Before it runs, the goroutine
